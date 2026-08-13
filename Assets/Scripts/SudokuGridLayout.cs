@@ -40,10 +40,13 @@ public class SudokuGridLayout : MonoBehaviour
 
         if (bigGridPadding == null) bigGridPadding = new RectOffset(0, 0, 0, 0);
         if (smallGridPadding == null) smallGridPadding = new RectOffset(0, 0, 0, 0);
-    }
 
-    private void Start()
-    {
+        // Built in Awake (not Start) so the grid exists before ANY other
+        // script's Start() runs. Previously this ran in Start(), which raced
+        // against SudokuGameManager.Start() -> PopulateBoard(): if the
+        // GameManager's Start() fired first, it would build + populate the
+        // board, then this Start() would fire afterward and rebuild an empty
+        // board on top of it, wiping out the fixed numbers.
         BuildBoard();
     }
 
@@ -131,11 +134,63 @@ public class SudokuGridLayout : MonoBehaviour
         numberText.text = "";
         if (cellFontAsset != null) numberText.font = cellFontAsset;
 
+        // Small pencil-mark notes grid (3x3: 1 2 3 / 4 5 6 / 7 8 9), sits
+        // behind/alongside the main number and is only shown when the cell
+        // is empty and has at least one note toggled on.
+        GameObject notesGO = new GameObject("Notes", typeof(RectTransform));
+        notesGO.transform.SetParent(cellGO.transform, false);
+
+        RectTransform notesRect = notesGO.GetComponent<RectTransform>();
+        notesRect.anchorMin = Vector2.zero;
+        notesRect.anchorMax = Vector2.one;
+        notesRect.offsetMin = Vector2.zero;
+        notesRect.offsetMax = Vector2.zero;
+
+        TextMeshProUGUI notesText = notesGO.AddComponent<TextMeshProUGUI>();
+        notesText.alignment = TextAlignmentOptions.Center;
+        notesText.color = new Color(cellTextColor.r, cellTextColor.g, cellTextColor.b, 0.65f);
+        notesText.enableAutoSizing = false;
+        notesText.fontSize = 16f;
+        notesText.lineSpacing = -10f;
+        notesText.text = "";
+        notesText.gameObject.SetActive(false);
+        if (cellFontAsset != null) notesText.font = cellFontAsset;
+
         SudokuCell cell = cellGO.AddComponent<SudokuCell>();
-        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, cellDefaultBgColor, cellSelectedBgColor);
+        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, cellDefaultBgColor, cellSelectedBgColor, cellTextColor, notesText);
         cell.OnCellClicked += HandleCellClicked;
 
         return cell;
+    }
+
+    public void PopulateBoard(int[,] puzzle)
+    {
+        if (Cells == null) BuildBoard();
+
+        for (int r = 0; r < BoxCount * CellCount; r++)
+        {
+            for (int c = 0; c < BoxCount * CellCount; c++)
+            {
+                int val = puzzle[r, c];
+                if (val != 0)
+                {
+                    Cells[r, c].SetFixedNumber(val);
+                }
+                else
+                {
+                    Cells[r, c].ClearCell();
+                }
+            }
+        }
+    }
+
+    public void ClearSelection()
+    {
+        if (SelectedCell != null)
+        {
+            SelectedCell.SetSelected(false);
+            SelectedCell = null;
+        }
     }
 
     private void HandleCellClicked(SudokuCell cell)
