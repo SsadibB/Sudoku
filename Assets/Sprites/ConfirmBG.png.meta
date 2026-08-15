@@ -1,10 +1,10 @@
 fileFormatVersion: 2
-guid: 5a0b54c7cbfef9e46b6b1ae6d66373aa
+guid: 45e16a7f90c192a4db605c2be1544130
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: -4937487055332590994
-    second: halfheart_0
+      213: 5172082267786833835
+    second: ConfirmBG_0
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -113,13 +113,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: halfheart_0
+      name: ConfirmBG_0
       rect:
         serializedVersion: 2
-        x: 25
-        y: 14
-        width: 442
-        height: 415
+        x: 0
+        y: 0
+        width: 2172
+        height: 707
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -128,8 +128,8 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: e6abfcfdea58a7bb0800000000000000
-      internalID: -4937487055332590994
+      spriteID: bafe7807b6de6c740800000000000000
+      internalID: 5172082267786833835
       vertices: []
       indices: 
       edges: []
@@ -148,7 +148,7 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      halfheart_0: -4937487055332590994
+      ConfirmBG_0: 5172082267786833835
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

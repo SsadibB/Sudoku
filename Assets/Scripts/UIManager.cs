@@ -37,6 +37,11 @@ public class UIManager : MonoBehaviour
     // Key used to pass the chosen difficulty to the game scene
     public const string DifficultyPrefKey = "SelectedDifficulty";
 
+    // Key used to tell this scene to open straight into the difficulty
+    // panel (e.g. when reloaded from a mid-game restart) instead of
+    // booting into the main menu buttons.
+    public const string OpenDifficultyOnLoadKey = "OpenDifficultyOnLoad";
+
     private Tween playButtonPulseTween;
     private Sequence difficultyPanelSequence;
 
@@ -60,7 +65,24 @@ public class UIManager : MonoBehaviour
         }
 
         RegisterListeners();
-        StartPlayButtonPulse();
+
+        if (PlayerPrefs.GetInt(OpenDifficultyOnLoadKey, 0) == 1)
+        {
+            PlayerPrefs.DeleteKey(OpenDifficultyOnLoadKey);
+            PlayerPrefs.Save();
+
+            // Skip the main menu buttons entirely and open straight into
+            // the difficulty panel, mirroring what OnPlayClicked() does.
+            if (settingsButton != null) settingsButton.gameObject.SetActive(false);
+            if (aboutButton != null) aboutButton.gameObject.SetActive(false);
+            if (playButton != null) playButton.gameObject.SetActive(false);
+
+            ShowDifficultyPanel();
+        }
+        else
+        {
+            StartPlayButtonPulse();
+        }
     }
 
     private void RegisterListeners()

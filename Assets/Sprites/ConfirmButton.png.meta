@@ -1,10 +1,22 @@
 fileFormatVersion: 2
-guid: 971d0f059f8a13243854c2f196a41965
+guid: 51d7ad371cea36a40b8f87eb0785071a
 TextureImporter:
   internalIDToNameTable:
   - first:
-      213: -5438759292686507570
-    second: heartless_0
+      213: 7293670705454714393
+    second: ConfirmButton_0
+  - first:
+      213: -3364699217035739955
+    second: ConfirmButton_1
+  - first:
+      213: -9076410865788423602
+    second: ConfirmButton_2
+  - first:
+      213: 4817930904956100825
+    second: ConfirmButton_3
+  - first:
+      213: 2008752498179175277
+    second: ConfirmButton_4
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -113,13 +125,13 @@ TextureImporter:
     serializedVersion: 2
     sprites:
     - serializedVersion: 2
-      name: heartless_0
+      name: ConfirmButton_0
       rect:
         serializedVersion: 2
-        x: 58
-        y: 30
-        width: 400
-        height: 338
+        x: 0
+        y: 25
+        width: 2172
+        height: 699
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -128,8 +140,96 @@ TextureImporter:
       physicsShape: []
       tessellationDetail: -1
       bones: []
-      spriteID: ec1e0943d35a584b0800000000000000
-      internalID: -5438759292686507570
+      spriteID: 91e0d43fcd2583560800000000000000
+      internalID: 7293670705454714393
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: ConfirmButton_1
+      rect:
+        serializedVersion: 2
+        x: 342
+        y: 717
+        width: 10
+        height: 7
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: dccbc8893ef2e41d0800000000000000
+      internalID: -3364699217035739955
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: ConfirmButton_2
+      rect:
+        serializedVersion: 2
+        x: 805
+        y: 710
+        width: 27
+        height: 14
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: e427f2d086c1a0280800000000000000
+      internalID: -9076410865788423602
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: ConfirmButton_3
+      rect:
+        serializedVersion: 2
+        x: 831
+        y: 714
+        width: 11
+        height: 6
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: 9d0e84ea1aabcd240800000000000000
+      internalID: 4817930904956100825
+      vertices: []
+      indices: 
+      edges: []
+      weights: []
+    - serializedVersion: 2
+      name: ConfirmButton_4
+      rect:
+        serializedVersion: 2
+        x: 869
+        y: 703
+        width: 17
+        height: 17
+      alignment: 0
+      pivot: {x: 0, y: 0}
+      border: {x: 0, y: 0, z: 0, w: 0}
+      customData: 
+      outline: []
+      physicsShape: []
+      tessellationDetail: -1
+      bones: []
+      spriteID: d63f5a711c580eb10800000000000000
+      internalID: 2008752498179175277
       vertices: []
       indices: 
       edges: []
@@ -148,7 +248,11 @@ TextureImporter:
     spriteCustomMetadata:
       entries: []
     nameFileIdTable:
-      heartless_0: -5438759292686507570
+      ConfirmButton_0: 7293670705454714393
+      ConfirmButton_1: -3364699217035739955
+      ConfirmButton_2: -9076410865788423602
+      ConfirmButton_3: 4817930904956100825
+      ConfirmButton_4: 2008752498179175277
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

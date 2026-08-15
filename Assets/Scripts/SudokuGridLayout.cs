@@ -22,6 +22,9 @@ public class SudokuGridLayout : MonoBehaviour
     [SerializeField] private Color cellTextColor = new Color(0.25f, 0.15f, 0.05f, 1f);
     [SerializeField] private Color cellDefaultBgColor = new Color(1f, 1f, 1f, 0f); // transparent, board art shows through
     [SerializeField] private Color cellSelectedBgColor = new Color(1f, 0.85f, 0.4f, 0.5f);
+    [SerializeField] private Color cellHighlightBgColor = new Color(0.5f, 0.5f, 0.5f, 0.35f); // greyish row/col/box highlight
+    [Tooltip("Fixed point size for every cell's number. Every cell always shows exactly one digit at the same cell size, so a fixed size keeps every digit rendering identically thick/bold - auto-sizing here can settle at slightly different sizes per cell, making some look bolder than others.")]
+    [SerializeField] private float cellNumberFontSize = 70f;
 
     private const int BoxCount = 3;   // 3x3 boxes
     private const int CellCount = 3;  // 3x3 small cells inside each box
@@ -128,9 +131,8 @@ public class SudokuGridLayout : MonoBehaviour
         TextMeshProUGUI numberText = textGO.AddComponent<TextMeshProUGUI>();
         numberText.alignment = TextAlignmentOptions.Center;
         numberText.color = cellTextColor;
-        numberText.enableAutoSizing = true;
-        numberText.fontSizeMin = 10f;
-        numberText.fontSizeMax = 72f;
+        numberText.enableAutoSizing = false;
+        numberText.fontSize = cellNumberFontSize;
         numberText.text = "";
         if (cellFontAsset != null) numberText.font = cellFontAsset;
 
@@ -149,15 +151,16 @@ public class SudokuGridLayout : MonoBehaviour
         TextMeshProUGUI notesText = notesGO.AddComponent<TextMeshProUGUI>();
         notesText.alignment = TextAlignmentOptions.Center;
         notesText.color = new Color(cellTextColor.r, cellTextColor.g, cellTextColor.b, 0.65f);
-        notesText.enableAutoSizing = false;
-        notesText.fontSize = 16f;
-        notesText.lineSpacing = -10f;
+        notesText.enableAutoSizing = true;
+        notesText.fontSizeMin = 6f;
+        notesText.fontSizeMax = 32f;
+        notesText.lineSpacing = -18f;
         notesText.text = "";
         notesText.gameObject.SetActive(false);
         if (cellFontAsset != null) notesText.font = cellFontAsset;
 
         SudokuCell cell = cellGO.AddComponent<SudokuCell>();
-        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, cellDefaultBgColor, cellSelectedBgColor, cellTextColor, notesText);
+        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, cellDefaultBgColor, cellSelectedBgColor, cellTextColor, notesText, cellHighlightBgColor);
         cell.OnCellClicked += HandleCellClicked;
 
         return cell;
@@ -191,6 +194,7 @@ public class SudokuGridLayout : MonoBehaviour
             SelectedCell.SetSelected(false);
             SelectedCell = null;
         }
+        ClearHighlights();
     }
 
     private void HandleCellClicked(SudokuCell cell)
@@ -200,5 +204,60 @@ public class SudokuGridLayout : MonoBehaviour
 
         SelectedCell = cell;
         SelectedCell.SetSelected(true);
+
+        RefreshHighlights(cell);
+    }
+
+    // Greys out the selected cell's entire row, entire column, and its
+    // containing 3x3 box (the selected cell itself is left at its
+    // "selected" color, not the grey highlight). Also pulses every other
+    // cell on the board that shares the selected cell's number.
+    private void RefreshHighlights(SudokuCell selected)
+    {
+        if (Cells == null) return;
+
+        int boxRowStart = (selected.Row / CellCount) * CellCount;
+        int boxColStart = (selected.Col / CellCount) * CellCount;
+        int selectedNumber = selected.GetNumber();
+
+        for (int r = 0; r < BoxCount * CellCount; r++)
+        {
+            for (int c = 0; c < BoxCount * CellCount; c++)
+            {
+                SudokuCell cell = Cells[r, c];
+                if (cell == null) continue;
+
+                if (cell == selected)
+                {
+                    cell.SetHighlighted(false);
+                    continue;
+                }
+
+                bool sameRow = r == selected.Row;
+                bool sameCol = c == selected.Col;
+                bool sameBox = r >= boxRowStart && r < boxRowStart + CellCount &&
+                               c >= boxColStart && c < boxColStart + CellCount;
+
+                cell.SetHighlighted(sameRow || sameCol || sameBox);
+
+                if (selectedNumber != 0 && cell.GetNumber() == selectedNumber)
+                {
+                    cell.PulseNumber();
+                }
+            }
+        }
+    }
+
+    private void ClearHighlights()
+    {
+        if (Cells == null) return;
+
+        for (int r = 0; r < Cells.GetLength(0); r++)
+        {
+            for (int c = 0; c < Cells.GetLength(1); c++)
+            {
+                Cells[r, c]?.SetHighlighted(false);
+            }
+        }
     }
 }

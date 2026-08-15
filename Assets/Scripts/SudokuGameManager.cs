@@ -4,6 +4,8 @@ using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using UnityEngine.InputSystem;
+using DG.Tweening;
 
 public class SudokuGameManager : MonoBehaviour
 {
@@ -21,6 +23,13 @@ public class SudokuGameManager : MonoBehaviour
     [Header("Keypad Number Buttons (1 - 9)")]
     [SerializeField] private Button[] numberButtons;
 
+    [Header("Keypad Visual Feedback")]
+    [SerializeField] private Color notesModeButtonColor = new Color(1f, 0.85f, 0.4f, 1f);
+
+    [Header("Notes Button Visual Feedback")]
+    [SerializeField] private float notesButtonSelectedScale = 1.15f;
+    [SerializeField] private float notesButtonScaleAnimDuration = 0.15f;
+
     [Header("Action Controls")]
     [SerializeField] private Button undoButton;
     [SerializeField] private Button eraseButton;
@@ -33,11 +42,20 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private Button mediumPosterBtn;
     [SerializeField] private Button hardPosterBtn;
 
+    [Header("Restart Confirmation Panel (Header Restart Button Only)")]
+    [SerializeField] private GameObject restartConfirmationPanel;
+    [SerializeField] private Button restartConfirmYesButton;
+    [SerializeField] private Button restartConfirmNoButton;
+
     private int[,] solutionGrid;
     private int[,] puzzleGrid;
     private bool isGameActive;
     private bool notesMode;
     private UIManager.Difficulty currentDifficulty;
+
+    // Each keypad button's original tint, so Note Mode's color swap can be
+    // reverted cleanly when it's turned off.
+    private Color[] numberButtonDefaultColors;
 
     private struct CellMove
     {
@@ -91,17 +109,23 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (!isGameActive) return;
 
-        // Process Keyboard inputs
+        Keyboard keyboard = Keyboard.current;
+        if (keyboard == null) return; // no keyboard device connected (e.g. mobile)
+
+        // Process Keyboard inputs (new Input System)
         for (int i = 1; i <= 9; i++)
         {
-            if (Input.GetKeyDown(KeyCode.Alpha0 + i) || Input.GetKeyDown(KeyCode.Keypad0 + i))
+            Key numberKey = Key.Digit1 + (i - 1);
+            Key numpadKey = Key.Numpad1 + (i - 1);
+
+            if (keyboard[numberKey].wasPressedThisFrame || keyboard[numpadKey].wasPressedThisFrame)
             {
                 OnNumberEntered(i);
                 break;
             }
         }
 
-        if (Input.GetKeyDown(KeyCode.Backspace) || Input.GetKeyDown(KeyCode.Delete))
+        if (keyboard[Key.Backspace].wasPressedThisFrame || keyboard[Key.Delete].wasPressedThisFrame)
         {
             OnEraseClicked();
         }
@@ -116,11 +140,19 @@ public class SudokuGameManager : MonoBehaviour
         // Keypad Buttons
         if (numberButtons != null)
         {
+            numberButtonDefaultColors = new Color[numberButtons.Length];
+
             for (int i = 0; i < numberButtons.Length; i++)
             {
                 int num = i + 1;
+
                 if (numberButtons[i] != null)
+                {
+                    if (numberButtons[i].image != null)
+                        numberButtonDefaultColors[i] = numberButtons[i].image.color;
+
                     numberButtons[i].onClick.AddListener(() => OnNumberEntered(num));
+                }
             }
         }
 
@@ -146,6 +178,13 @@ public class SudokuGameManager : MonoBehaviour
         if (easyPosterBtn != null) easyPosterBtn.onClick.AddListener(() => SelectDifficultyAndStart(UIManager.Difficulty.Easy));
         if (mediumPosterBtn != null) mediumPosterBtn.onClick.AddListener(() => SelectDifficultyAndStart(UIManager.Difficulty.Medium));
         if (hardPosterBtn != null) hardPosterBtn.onClick.AddListener(() => SelectDifficultyAndStart(UIManager.Difficulty.Hard));
+
+        // Restart Confirmation Panel (header restart button only)
+        if (restartConfirmationPanel != null)
+            restartConfirmationPanel.SetActive(false);
+
+        if (restartConfirmYesButton != null) restartConfirmYesButton.onClick.AddListener(OnRestartConfirmYesClicked);
+        if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.AddListener(OnRestartConfirmNoClicked);
     }
 
     private void OnDestroy()
@@ -155,6 +194,9 @@ public class SudokuGameManager : MonoBehaviour
 
         if (heartManager != null)
             heartManager.OnGameOver -= HandleGameOver;
+
+        if (restartConfirmYesButton != null) restartConfirmYesButton.onClick.RemoveListener(OnRestartConfirmYesClicked);
+        if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.RemoveListener(OnRestartConfirmNoClicked);
     }
 
     public void StartNewGame(UIManager.Difficulty difficulty)
@@ -185,6 +227,10 @@ public class SudokuGameManager : MonoBehaviour
             difficultySelectionPanel.SetActive(false);
         }
 
+        notesMode = false;
+        UpdateKeypadColorsForNotesMode();
+        ResetNotesButtonScale();
+
         isGameActive = true;
     }
 
@@ -213,6 +259,7 @@ public class SudokuGameManager : MonoBehaviour
             // Correct placements lock permanently — not pushed to the undo
             // stack (nothing to undo back to) and can't be erased.
             selected.LockAsCorrect(number);
+            selected.GlowNumber();
             CheckWinCondition();
         }
         else
@@ -220,6 +267,7 @@ public class SudokuGameManager : MonoBehaviour
             // Only wrong entries are undo-able / erasable.
             undoStack.Push(new CellMove(row, col, selected.GetNumber(), selected.IsFixed, selected.IsCorrect));
             selected.SetUserNumber(number, false);
+            selected.GlowNumber();
 
             // Wrong number entry -> Deduct half heart!
             if (heartManager != null)
@@ -238,9 +286,58 @@ public class SudokuGameManager : MonoBehaviour
         }
     }
 
+    // The color a button should show normally: its own default tint, or
+    // the Note Mode tint while notes are on.
+    private Color GetKeypadIdleColor(int index)
+    {
+        Color defaultColor = (numberButtonDefaultColors != null && index < numberButtonDefaultColors.Length)
+            ? numberButtonDefaultColors[index]
+            : Color.white;
+
+        return notesMode ? notesModeButtonColor : defaultColor;
+    }
+
     private void OnNotesToggleClicked()
     {
         notesMode = !notesMode;
+        UpdateKeypadColorsForNotesMode();
+        UpdateNotesButtonScale();
+    }
+
+    // Swaps every keypad button's tint to notesModeButtonColor while Note
+    // Mode is active, reverting to each button's own original color when
+    // it's turned off.
+    private void UpdateKeypadColorsForNotesMode()
+    {
+        if (numberButtons == null) return;
+
+        for (int i = 0; i < numberButtons.Length; i++)
+        {
+            Button btn = numberButtons[i];
+            if (btn == null || btn.image == null) continue;
+
+            btn.image.color = GetKeypadIdleColor(i);
+        }
+    }
+
+    // The Note button itself scales up while Note Mode is active, and
+    // shrinks back to normal when it's turned off.
+    private void UpdateNotesButtonScale()
+    {
+        if (notesButton == null) return;
+
+        notesButton.transform.DOKill();
+        notesButton.transform.DOScale(notesMode ? notesButtonSelectedScale : 1f, notesButtonScaleAnimDuration)
+            .SetEase(Ease.OutBack)
+            .SetLink(notesButton.gameObject);
+    }
+
+    private void ResetNotesButtonScale()
+    {
+        if (notesButton == null) return;
+
+        notesButton.transform.DOKill();
+        notesButton.transform.localScale = Vector3.one;
     }
 
     private void OnEraseClicked()
@@ -327,7 +424,29 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnRestartHeaderClicked()
     {
+        if (restartConfirmationPanel != null)
+        {
+            restartConfirmationPanel.SetActive(true);
+        }
+        else
+        {
+            // No confirmation panel assigned, fall back to old behavior.
+            PromptDifficultySelection();
+        }
+    }
+
+    private void OnRestartConfirmYesClicked()
+    {
+        if (restartConfirmationPanel != null)
+            restartConfirmationPanel.SetActive(false);
+
         PromptDifficultySelection();
+    }
+
+    private void OnRestartConfirmNoClicked()
+    {
+        if (restartConfirmationPanel != null)
+            restartConfirmationPanel.SetActive(false);
     }
 
     private void OnGameOverRestartRequested()
@@ -337,13 +456,27 @@ public class SudokuGameManager : MonoBehaviour
 
     private void PromptDifficultySelection()
     {
+        // Stop the game (and keyboard input processing in Update()) the
+        // instant the difficulty panel opens, so the old board can't keep
+        // reacting to input while the player is choosing a new difficulty.
+        isGameActive = false;
+
+        if (gridLayout != null)
+        {
+            gridLayout.ClearSelection();
+        }
+
         if (difficultySelectionPanel != null)
         {
             difficultySelectionPanel.SetActive(true);
         }
         else
         {
-            // Return to Main Menu scene to select difficulty
+            // Return to Main Menu scene to select difficulty. Flag that the
+            // MainMenu scene should skip straight to the difficulty panel
+            // instead of booting into the main menu buttons.
+            PlayerPrefs.SetInt(UIManager.OpenDifficultyOnLoadKey, 1);
+            PlayerPrefs.Save();
             SceneManager.LoadScene("MainMenu");
         }
     }
