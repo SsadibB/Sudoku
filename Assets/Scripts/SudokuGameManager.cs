@@ -14,7 +14,14 @@ public class SudokuGameManager : MonoBehaviour
     [Header("Core Components")]
     [SerializeField] private SudokuGridLayout gridLayout;
     [SerializeField] private HeartManager heartManager;
-    [SerializeField] private SudokuGameOverPanel gameOverPanel;
+
+    [Header("Output Panel (Game Over / Victory)")]
+    [SerializeField] private GameObject outputPanel;
+    [SerializeField] private CanvasGroup outputPanelCanvasGroup;
+    [SerializeField] private GameObject gameOverText;
+    [SerializeField] private GameObject victoryText;
+    [SerializeField] private Button outputRestartButton;
+    [SerializeField] private float outputPanelAnimDuration = 0.4f;
 
     [Header("In-Game Header Buttons")]
     [SerializeField] private Button backButton;
@@ -52,6 +59,8 @@ public class SudokuGameManager : MonoBehaviour
     private bool isGameActive;
     private bool notesMode;
     private UIManager.Difficulty currentDifficulty;
+
+    private Sequence outputPanelSequence;
 
     // Each keypad button's original tint, so Note Mode's color swap can be
     // reverted cleanly when it's turned off.
@@ -162,11 +171,11 @@ public class SudokuGameManager : MonoBehaviour
         if (hintButton != null) hintButton.onClick.AddListener(OnHintClicked);
         if (notesButton != null) notesButton.onClick.AddListener(OnNotesToggleClicked);
 
-        // GameOver Panel Event
-        if (gameOverPanel != null)
-        {
-            gameOverPanel.OnRestartClicked += OnGameOverRestartRequested;
-        }
+        // Output Panel Restart Button
+        if (outputPanel != null)
+            outputPanel.SetActive(false);
+
+        if (outputRestartButton != null) outputRestartButton.onClick.AddListener(OnOutputRestartClicked);
 
         // Heart Manager Event
         if (heartManager != null)
@@ -189,12 +198,12 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnDestroy()
     {
-        if (gameOverPanel != null)
-            gameOverPanel.OnRestartClicked -= OnGameOverRestartRequested;
+        outputPanelSequence?.Kill();
 
         if (heartManager != null)
             heartManager.OnGameOver -= HandleGameOver;
 
+        if (outputRestartButton != null) outputRestartButton.onClick.RemoveListener(OnOutputRestartClicked);
         if (restartConfirmYesButton != null) restartConfirmYesButton.onClick.RemoveListener(OnRestartConfirmYesClicked);
         if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.RemoveListener(OnRestartConfirmNoClicked);
     }
@@ -217,9 +226,10 @@ public class SudokuGameManager : MonoBehaviour
             heartManager.ResetHearts();
         }
 
-        if (gameOverPanel != null)
+        if (outputPanel != null)
         {
-            gameOverPanel.HidePanel();
+            outputPanelSequence?.Kill();
+            outputPanel.SetActive(false);
         }
 
         if (difficultySelectionPanel != null)
@@ -402,10 +412,7 @@ public class SudokuGameManager : MonoBehaviour
 
         // Victory!
         isGameActive = false;
-        if (gameOverPanel != null)
-        {
-            gameOverPanel.ShowWin();
-        }
+        ShowOutputPanel(isVictory: true);
     }
 
     private void HandleGameOver()
@@ -416,10 +423,53 @@ public class SudokuGameManager : MonoBehaviour
         if (!isGameActive) return;
 
         isGameActive = false;
-        if (gameOverPanel != null)
+        ShowOutputPanel(isVictory: false);
+    }
+
+    private void ShowOutputPanel(bool isVictory)
+    {
+        if (outputPanel == null) return;
+
+        if (gameOverText != null) gameOverText.SetActive(!isVictory);
+        if (victoryText != null) victoryText.SetActive(isVictory);
+
+        outputPanelSequence?.Kill();
+
+        outputPanel.SetActive(true);
+        outputPanel.transform.localScale = Vector3.one * 0.7f;
+
+        if (outputPanelCanvasGroup != null) outputPanelCanvasGroup.alpha = 0f;
+
+        outputPanelSequence = DOTween.Sequence()
+            .Append(outputPanel.transform.DOScale(1f, outputPanelAnimDuration).SetEase(Ease.OutBack))
+            .Join(outputPanelCanvasGroup != null ? outputPanelCanvasGroup.DOFade(1f, outputPanelAnimDuration) : null)
+            .SetLink(outputPanel);
+    }
+
+    private void HideOutputPanel()
+    {
+        if (outputPanel == null) return;
+
+        outputPanelSequence?.Kill();
+
+        if (outputPanelCanvasGroup != null)
         {
-            gameOverPanel.ShowGameOver();
+            outputPanelSequence = DOTween.Sequence()
+                .Append(outputPanelCanvasGroup.DOFade(0f, outputPanelAnimDuration))
+                .Join(outputPanel.transform.DOScale(0.8f, outputPanelAnimDuration))
+                .OnComplete(() => outputPanel.SetActive(false))
+                .SetLink(outputPanel);
         }
+        else
+        {
+            outputPanel.SetActive(false);
+        }
+    }
+
+    private void OnOutputRestartClicked()
+    {
+        HideOutputPanel();
+        PromptDifficultySelection();
     }
 
     private void OnRestartHeaderClicked()
@@ -447,11 +497,6 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (restartConfirmationPanel != null)
             restartConfirmationPanel.SetActive(false);
-    }
-
-    private void OnGameOverRestartRequested()
-    {
-        PromptDifficultySelection();
     }
 
     private void PromptDifficultySelection()
