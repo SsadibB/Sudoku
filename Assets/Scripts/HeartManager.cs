@@ -37,6 +37,9 @@ public class HeartManager : MonoBehaviour
     public const int MaxHalfHearts = 6;
     public int CurrentHalfHearts { get; private set; }
 
+    // Only 1 full heart (2 half hearts) remaining. Plays once per game.
+    private bool oneHeartWarningPlayed;
+
     public bool IsGameOver => CurrentHalfHearts <= 0;
 
     public System.Action OnGameOver;
@@ -91,6 +94,7 @@ public class HeartManager : MonoBehaviour
     public void ResetHearts()
     {
         CurrentHalfHearts = MaxHalfHearts;
+        oneHeartWarningPlayed = false;
         UpdateUI();
         ResetAllHats();
     }
@@ -131,6 +135,13 @@ public class HeartManager : MonoBehaviour
         int slotHalfHeartsAfter = CurrentHalfHearts - (affectedHeartIndex * 2);
 
         UpdateUI();
+
+        // Exactly 1 full heart (2 half hearts) remaining — warn once per game.
+        if (CurrentHalfHearts == 2 && !oneHeartWarningPlayed)
+        {
+            oneHeartWarningPlayed = true;
+            SoundManager.Instance?.PlaySFX("OneHeart");
+        }
 
         // Punch/Shake effect on damaged heart slot
         if (heartSlots != null && affectedHeartIndex >= 0 && affectedHeartIndex < heartSlots.Length)

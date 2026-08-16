@@ -9,7 +9,10 @@ public class SoundLibrary : ScriptableObject
     public class MusicEntry
     {
         public string id;
-        public AudioClip clip;
+
+        [Tooltip("One clip is picked at random each time this track starts playing. Add just one clip if you don't want variation.")]
+        public AudioClip[] clips;
+
         [Range(0f, 1f)] public float volume = 1f;
         public bool loop = true;
     }

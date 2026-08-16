@@ -63,6 +63,30 @@ public class UIManager : MonoBehaviour
     // booting into the main menu buttons.
     public const string OpenDifficultyOnLoadKey = "OpenDifficultyOnLoad";
 
+    // Shared Sound Library ID lookups, so this class and SudokuGameManager
+    // always agree on which SFX/music ID goes with which difficulty.
+    public static string GetDifficultyButtonSfxId(Difficulty difficulty)
+    {
+        switch (difficulty)
+        {
+            case Difficulty.Easy: return "EasyButton";
+            case Difficulty.Medium: return "MediumButton";
+            case Difficulty.Hard: return "HardButton";
+            default: return "Button";
+        }
+    }
+
+    public static string GetDifficultyMusicId(Difficulty difficulty)
+    {
+        switch (difficulty)
+        {
+            case Difficulty.Easy: return "EasyMusic";
+            case Difficulty.Medium: return "MediumMusic";
+            case Difficulty.Hard: return "HardMusic";
+            default: return "EasyMusic";
+        }
+    }
+
     private Tween playButtonPulseTween;
     private Sequence difficultyPanelSequence;
     private Sequence settingsPanelSequence;
@@ -383,7 +407,7 @@ public class UIManager : MonoBehaviour
 
     private void OnDifficultySelected(Difficulty difficulty)
     {
-        PlayButtonSfx();
+        SoundManager.Instance?.PlaySFX(GetDifficultyButtonSfxId(difficulty));
 
         PlayerPrefs.SetString(DifficultyPrefKey, difficulty.ToString());
         PlayerPrefs.Save();

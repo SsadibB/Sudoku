@@ -130,7 +130,7 @@ public class SoundManager : MonoBehaviour
 
     private void StartTrack(SoundLibrary.MusicEntry track)
     {
-        musicSource.clip = track.clip;
+        musicSource.clip = track.clips[Random.Range(0, track.clips.Length)];
         musicSource.loop = track.loop;
         musicSource.Play();
     }

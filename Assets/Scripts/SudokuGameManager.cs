@@ -55,6 +55,13 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private Button restartConfirmYesButton;
     [SerializeField] private Button restartConfirmNoButton;
 
+    [Header("Random Ambient SFX (Gameplay)")]
+    [Tooltip("While a game is active, 'RandomSFX' plays repeatedly at a random interval between these two values (seconds).")]
+    [SerializeField] private float randomSfxMinInterval = 15f;
+    [SerializeField] private float randomSfxMaxInterval = 30f;
+
+    private Coroutine randomSfxCoroutine;
+
     private int[,] solutionGrid;
     private int[,] puzzleGrid;
     private bool isGameActive;
@@ -205,6 +212,7 @@ public class SudokuGameManager : MonoBehaviour
     private void OnDestroy()
     {
         outputPanelSequence?.Kill();
+        StopRandomSfxLoop();
 
         if (heartManager != null)
             heartManager.OnGameOver -= HandleGameOver;
@@ -248,6 +256,36 @@ public class SudokuGameManager : MonoBehaviour
         ResetNotesButtonScale();
 
         isGameActive = true;
+
+        SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(difficulty));
+        StartRandomSfxLoop();
+    }
+
+    private void StartRandomSfxLoop()
+    {
+        if (randomSfxCoroutine != null) StopCoroutine(randomSfxCoroutine);
+        randomSfxCoroutine = StartCoroutine(RandomSfxLoop());
+    }
+
+    private void StopRandomSfxLoop()
+    {
+        if (randomSfxCoroutine != null)
+        {
+            StopCoroutine(randomSfxCoroutine);
+            randomSfxCoroutine = null;
+        }
+    }
+
+    private IEnumerator RandomSfxLoop()
+    {
+        while (isGameActive)
+        {
+            float wait = UnityEngine.Random.Range(randomSfxMinInterval, randomSfxMaxInterval);
+            yield return new WaitForSeconds(wait);
+
+            if (!isGameActive) yield break;
+            SoundManager.Instance?.PlaySFX("RandomSFX");
+        }
     }
 
     private void OnNumberEntered(int number)
@@ -272,6 +310,8 @@ public class SudokuGameManager : MonoBehaviour
 
         if (isCorrect)
         {
+            SoundManager.Instance?.PlaySFX("Right");
+
             // Correct placements lock permanently — not pushed to the undo
             // stack (nothing to undo back to) and can't be erased.
             selected.LockAsCorrect(number);
@@ -281,6 +321,8 @@ public class SudokuGameManager : MonoBehaviour
         }
         else
         {
+            SoundManager.Instance?.PlaySFX("Wrong");
+
             // Only wrong entries are undo-able / erasable.
             undoStack.Push(new CellMove(row, col, selected.GetNumber(), selected.IsFixed, selected.IsCorrect));
             selected.SetUserNumber(number, false);
@@ -409,6 +451,7 @@ public class SudokuGameManager : MonoBehaviour
 
         if (selected.GetNumber() != 0)
         {
+            SoundManager.Instance?.PlaySFX("Erase");
             undoStack.Push(new CellMove(selected.Row, selected.Col, selected.GetNumber(), selected.IsFixed, selected.IsCorrect));
             selected.ClearCell();
         }
@@ -421,6 +464,8 @@ public class SudokuGameManager : MonoBehaviour
         CellMove lastMove = undoStack.Pop();
         SudokuCell cell = gridLayout.Cells[lastMove.Row, lastMove.Col];
         if (cell == null || cell.IsFixed) return;
+
+        SoundManager.Instance?.PlaySFX("Undo");
 
         if (lastMove.PreviousNumber == 0)
         {
@@ -438,6 +483,8 @@ public class SudokuGameManager : MonoBehaviour
 
         SudokuCell selected = gridLayout.SelectedCell;
         if (selected == null || selected.IsFixed) return;
+
+        SoundManager.Instance?.PlaySFX("Hint");
 
         int correctVal = solutionGrid[selected.Row, selected.Col];
         selected.SetFixedNumber(correctVal);
@@ -481,6 +528,10 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (outputPanel == null) return;
 
+        StopRandomSfxLoop();
+        SoundManager.Instance?.StopMusic();
+        SoundManager.Instance?.PlaySFX(isVictory ? "Victory" : "GameOver");
+
         if (gameOverText != null) gameOverText.SetActive(!isVictory);
         if (victoryText != null) victoryText.SetActive(isVictory);
 
@@ -519,12 +570,15 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnOutputRestartClicked()
     {
+        SoundManager.Instance?.PlaySFX("Button");
         HideOutputPanel();
         PromptDifficultySelection();
     }
 
     private void OnRestartHeaderClicked()
     {
+        SoundManager.Instance?.PlaySFX("Button");
+
         if (restartConfirmationPanel != null)
         {
             restartConfirmationPanel.SetActive(true);
@@ -538,6 +592,9 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnRestartConfirmYesClicked()
     {
+
+        SoundManager.Instance?.PlaySFX("Button");
+
         if (restartConfirmationPanel != null)
             restartConfirmationPanel.SetActive(false);
 
@@ -546,6 +603,8 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnRestartConfirmNoClicked()
     {
+        SoundManager.Instance?.PlaySFX("Button");
+
         if (restartConfirmationPanel != null)
             restartConfirmationPanel.SetActive(false);
     }
@@ -556,6 +615,7 @@ public class SudokuGameManager : MonoBehaviour
         // instant the difficulty panel opens, so the old board can't keep
         // reacting to input while the player is choosing a new difficulty.
         isGameActive = false;
+        StopRandomSfxLoop();
 
         if (gridLayout != null)
         {
@@ -579,6 +639,8 @@ public class SudokuGameManager : MonoBehaviour
 
     private void SelectDifficultyAndStart(UIManager.Difficulty difficulty)
     {
+        SoundManager.Instance?.PlaySFX(UIManager.GetDifficultyButtonSfxId(difficulty));
+
         PlayerPrefs.SetString(UIManager.DifficultyPrefKey, difficulty.ToString());
         PlayerPrefs.Save();
         StartNewGame(difficulty);
@@ -586,6 +648,7 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnBackClicked()
     {
+        StopRandomSfxLoop();
         SceneManager.LoadScene("MainMenu");
     }
 }

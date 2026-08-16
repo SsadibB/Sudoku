@@ -14,13 +14,101 @@ MonoBehaviour:
   m_EditorClassIdentifier: Assembly-CSharp::SoundLibrary
   musicTracks:
   - id: MenuMusic
-    clip: {fileID: 8300000, guid: 815eddf7894017a44a6316bf5851abf8, type: 3}
-    volume: 1
+    clips:
+    - {fileID: 8300000, guid: 815eddf7894017a44a6316bf5851abf8, type: 3}
+    - {fileID: 8300000, guid: 431b2c469506e8043a965566cf11263a, type: 3}
+    - {fileID: 8300000, guid: 7d2f71d612e56744494c8eba9f31dd6b, type: 3}
+    - {fileID: 8300000, guid: 1061082eff2ccde4cb8a88896eb1b144, type: 3}
+    volume: 0.5
+    loop: 1
+  - id: EasyMusic
+    clips:
+    - {fileID: 8300000, guid: 6c9c5c0d6146783439d6ff8cd26b363e, type: 3}
+    volume: 0.2
+    loop: 1
+  - id: MediumMusic
+    clips:
+    - {fileID: 8300000, guid: 346cd859a7f60db459c72c26cef9a020, type: 3}
+    volume: 0.2
+    loop: 1
+  - id: HardMusic
+    clips:
+    - {fileID: 8300000, guid: b9998ffb23cbb6b4ca39bb6d4420edd2, type: 3}
+    volume: 0.2
     loop: 1
   sfxEntries:
   - id: Button
     clips:
-    - {fileID: 8300000, guid: 1b77b1d1799566445b001c0bb4ae5547, type: 3}
+    - {fileID: 8300000, guid: 78181324c2f0a99439ef34b0cefcd32e, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: EasyButton
+    clips:
+    - {fileID: 8300000, guid: ae443a4d3e1b11c40a329f07ce9cf589, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: MediumButton
+    clips:
+    - {fileID: 8300000, guid: ff7720bf43b1f9d43a4de153c1c64ca7, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: HardButton
+    clips:
+    - {fileID: 8300000, guid: c18bdb81c34d8334697ca9c07918cf0c, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: GameOver
+    clips:
+    - {fileID: 8300000, guid: cca58a292ae3fe8438a9d2d0acefc610, type: 3}
+    - {fileID: 8300000, guid: ffdbabb701049fc4ab6b66fda7d05fbc, type: 3}
+    - {fileID: 8300000, guid: ee8323e046b31e54ebc22d0302163207, type: 3}
+    - {fileID: 8300000, guid: 10d8bcc0ca3d9ca4b82a3cae4ffa21be, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Wrong
+    clips:
+    - {fileID: 8300000, guid: cf15a3220d22c40409ffc13998b28a6a, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Right
+    clips:
+    - {fileID: 8300000, guid: 79b098980419d9949b4b054b83f4ef76, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: OneHeart
+    clips:
+    - {fileID: 8300000, guid: ee8323e046b31e54ebc22d0302163207, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: RandomSFX
+    clips:
+    - {fileID: 8300000, guid: 2aa11fde8fa7967429f44128af88c59b, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Hint
+    clips:
+    - {fileID: 8300000, guid: 8ca6dd9821d74b44b88c901963e64913, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Undo
+    clips:
+    - {fileID: 8300000, guid: 051cb46eec470d64cbc1683d487dc9d4, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Erase
+    clips:
+    - {fileID: 8300000, guid: 00936deb17e8f4b4a9539ebb42715e2e, type: 3}
     volume: 1
     minPitch: 1
     maxPitch: 2
