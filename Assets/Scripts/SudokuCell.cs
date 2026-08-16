@@ -126,6 +126,19 @@ public class SudokuCell : MonoBehaviour
         else background.color = defaultBgColor;
     }
 
+    // Persistent scale-up on this cell's number, used while a cell sharing
+    // the same number is selected elsewhere on the board (or this cell is
+    // itself the selected one). Reverts back to normal size once the flag
+    // clears — unlike PulseNumber below, this holds rather than bouncing.
+    public void SetEnlarged(bool enlarged, float scale = 1.2f, float duration = 0.2f)
+    {
+        if (numberText == null) return;
+
+        Transform t = numberText.transform;
+        t.DOKill();
+        t.DOScale(enlarged ? Vector3.one * scale : Vector3.one, duration).SetEase(Ease.OutQuad).SetLink(numberText.gameObject);
+    }
+
     // Brief scale-punch on this cell's number, used to flag "same number as
     // the currently selected cell" elsewhere on the board.
     public void PulseNumber()

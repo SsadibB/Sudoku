@@ -25,6 +25,9 @@ public class SudokuGridLayout : MonoBehaviour
     [SerializeField] private Color cellHighlightBgColor = new Color(0.5f, 0.5f, 0.5f, 0.35f); // greyish row/col/box highlight
     [Tooltip("Fixed point size for every cell's number. Every cell always shows exactly one digit at the same cell size, so a fixed size keeps every digit rendering identically thick/bold - auto-sizing here can settle at slightly different sizes per cell, making some look bolder than others.")]
     [SerializeField] private float cellNumberFontSize = 70f;
+    [Tooltip("Scale applied to every cell on the board that shares the selected cell's number, for as long as that cell stays selected.")]
+    [SerializeField] private float sameNumberEnlargeScale = 1.2f;
+    [SerializeField] private float sameNumberEnlargeAnimDuration = 0.2f;
 
     private const int BoxCount = 3;   // 3x3 boxes
     private const int CellCount = 3;  // 3x3 small cells inside each box
@@ -195,6 +198,7 @@ public class SudokuGridLayout : MonoBehaviour
             SelectedCell = null;
         }
         ClearHighlights();
+        ClearEnlarged();
     }
 
     private void HandleCellClicked(SudokuCell cell)
@@ -210,8 +214,9 @@ public class SudokuGridLayout : MonoBehaviour
 
     // Greys out the selected cell's entire row, entire column, and its
     // containing 3x3 box (the selected cell itself is left at its
-    // "selected" color, not the grey highlight). Also pulses every other
-    // cell on the board that shares the selected cell's number.
+    // "selected" color, not the grey highlight). Also enlarges every cell
+    // on the board (including the selected cell itself) that shares the
+    // selected cell's number, for as long as it stays selected.
     private void RefreshHighlights(SudokuCell selected)
     {
         if (Cells == null) return;
@@ -227,6 +232,9 @@ public class SudokuGridLayout : MonoBehaviour
                 SudokuCell cell = Cells[r, c];
                 if (cell == null) continue;
 
+                bool sameNumber = selectedNumber != 0 && cell.GetNumber() == selectedNumber;
+                cell.SetEnlarged(sameNumber, sameNumberEnlargeScale, sameNumberEnlargeAnimDuration);
+
                 if (cell == selected)
                 {
                     cell.SetHighlighted(false);
@@ -239,11 +247,6 @@ public class SudokuGridLayout : MonoBehaviour
                                c >= boxColStart && c < boxColStart + CellCount;
 
                 cell.SetHighlighted(sameRow || sameCol || sameBox);
-
-                if (selectedNumber != 0 && cell.GetNumber() == selectedNumber)
-                {
-                    cell.PulseNumber();
-                }
             }
         }
     }
@@ -257,6 +260,19 @@ public class SudokuGridLayout : MonoBehaviour
             for (int c = 0; c < Cells.GetLength(1); c++)
             {
                 Cells[r, c]?.SetHighlighted(false);
+            }
+        }
+    }
+
+    private void ClearEnlarged()
+    {
+        if (Cells == null) return;
+
+        for (int r = 0; r < Cells.GetLength(0); r++)
+        {
+            for (int c = 0; c < Cells.GetLength(1); c++)
+            {
+                Cells[r, c]?.SetEnlarged(false, sameNumberEnlargeScale, sameNumberEnlargeAnimDuration);
             }
         }
     }
