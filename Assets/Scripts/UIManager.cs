@@ -98,6 +98,8 @@ public class UIManager : MonoBehaviour
         SyncLanguageLabel();
         SyncToggleVisualsFromSoundManager();
 
+        SoundManager.Instance.PlayMusic("MenuMusic");
+
         RegisterListeners();
 
         if (PlayerPrefs.GetInt(OpenDifficultyOnLoadKey, 0) == 1)
@@ -183,6 +185,7 @@ public class UIManager : MonoBehaviour
 
     private void OnPlayClicked()
     {
+        PlayButtonSfx();
         StopPlayButtonPulse();
 
         if (settingsButton != null) settingsButton.gameObject.SetActive(false);
@@ -194,6 +197,7 @@ public class UIManager : MonoBehaviour
 
     private void OnBackClicked()
     {
+        PlayButtonSfx();
         HideDifficultyPanel(() =>
         {
             if (playButton != null) playButton.gameObject.SetActive(true);
@@ -245,6 +249,12 @@ public class UIManager : MonoBehaviour
             .SetLink(difficultyPanel);
     }
 
+    // Shared click SFX played by every button on this screen.
+    private void PlayButtonSfx()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+    }
+
     private CanvasGroup GetOrAddCanvasGroup(GameObject go)
     {
         CanvasGroup cg = go.GetComponent<CanvasGroup>();
@@ -256,6 +266,8 @@ public class UIManager : MonoBehaviour
 
     private void OnSettingsClicked()
     {
+        PlayButtonSfx();
+
         // Reflect current audio state on the switches each time the panel opens.
         SyncToggleVisualsFromSoundManager();
 
@@ -264,6 +276,7 @@ public class UIManager : MonoBehaviour
 
     private void OnCloseSettingsClicked()
     {
+        PlayButtonSfx();
         HideSettingsPanel();
     }
 
@@ -319,6 +332,7 @@ public class UIManager : MonoBehaviour
 
     private void OnMusicToggleClicked()
     {
+        PlayButtonSfx();
         isMusicOn = !isMusicOn;
         ApplyToggleVisual(isMusicOn, musicOnCircle, musicOffCircle);
         SetStatusLabel(musicStatusLabel, isMusicOn);
@@ -327,6 +341,7 @@ public class UIManager : MonoBehaviour
 
     private void OnSfxToggleClicked()
     {
+        PlayButtonSfx();
         isSfxOn = !isSfxOn;
         ApplyToggleVisual(isSfxOn, sfxOnCircle, sfxOffCircle);
         SetStatusLabel(sfxStatusLabel, isSfxOn);
@@ -368,6 +383,8 @@ public class UIManager : MonoBehaviour
 
     private void OnDifficultySelected(Difficulty difficulty)
     {
+        PlayButtonSfx();
+
         PlayerPrefs.SetString(DifficultyPrefKey, difficulty.ToString());
         PlayerPrefs.Save();
 
