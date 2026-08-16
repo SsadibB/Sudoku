@@ -32,6 +32,7 @@ public class SudokuGameManager : MonoBehaviour
 
     [Header("Keypad Visual Feedback")]
     [SerializeField] private Color notesModeButtonColor = new Color(1f, 0.85f, 0.4f, 1f);
+    [SerializeField] private Color completedNumberButtonColor = new Color(0.5f, 0.5f, 0.5f, 1f);
 
     [Header("Notes Button Visual Feedback")]
     [SerializeField] private float notesButtonSelectedScale = 1.15f;
@@ -65,6 +66,10 @@ public class SudokuGameManager : MonoBehaviour
     // Each keypad button's original tint, so Note Mode's color swap can be
     // reverted cleanly when it's turned off.
     private Color[] numberButtonDefaultColors;
+
+    // Index i tracks whether digit (i + 1) has all 9 of its correct
+    // placements filled on the board — used to gray out that keypad button.
+    private bool[] numberCompleted;
 
     private struct CellMove
     {
@@ -150,6 +155,7 @@ public class SudokuGameManager : MonoBehaviour
         if (numberButtons != null)
         {
             numberButtonDefaultColors = new Color[numberButtons.Length];
+            numberCompleted = new bool[numberButtons.Length];
 
             for (int i = 0; i < numberButtons.Length; i++)
             {
@@ -238,7 +244,7 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         notesMode = false;
-        UpdateKeypadColorsForNotesMode();
+        UpdateCompletedNumbers();
         ResetNotesButtonScale();
 
         isGameActive = true;
@@ -270,6 +276,7 @@ public class SudokuGameManager : MonoBehaviour
             // stack (nothing to undo back to) and can't be erased.
             selected.LockAsCorrect(number);
             selected.GlowNumber();
+            UpdateCompletedNumbers();
             CheckWinCondition();
         }
         else
@@ -296,10 +303,14 @@ public class SudokuGameManager : MonoBehaviour
         }
     }
 
-    // The color a button should show normally: its own default tint, or
-    // the Note Mode tint while notes are on.
+    // The color a button should show normally: gray if that digit is fully
+    // placed on the board, otherwise its own default tint, or the Note
+    // Mode tint while notes are on.
     private Color GetKeypadIdleColor(int index)
     {
+        if (numberCompleted != null && index < numberCompleted.Length && numberCompleted[index])
+            return completedNumberButtonColor;
+
         Color defaultColor = (numberButtonDefaultColors != null && index < numberButtonDefaultColors.Length)
             ? numberButtonDefaultColors[index]
             : Color.white;
@@ -328,6 +339,45 @@ public class SudokuGameManager : MonoBehaviour
 
             btn.image.color = GetKeypadIdleColor(i);
         }
+    }
+
+    // Scans the board and grays out (+ disables) any keypad number that
+    // has all 9 of its correct placements already on the board.
+    private void UpdateCompletedNumbers()
+    {
+        if (numberButtons == null || gridLayout == null) return;
+
+        if (numberCompleted == null || numberCompleted.Length != numberButtons.Length)
+            numberCompleted = new bool[numberButtons.Length];
+
+        int[] counts = new int[10]; // index 1-9 used, 0 unused
+
+        for (int r = 0; r < 9; r++)
+        {
+            for (int c = 0; c < 9; c++)
+            {
+                SudokuCell cell = gridLayout.Cells[r, c];
+                if (cell == null) continue;
+
+                int num = cell.GetNumber();
+                if (num >= 1 && num <= 9 && cell.IsCorrect)
+                {
+                    counts[num]++;
+                }
+            }
+        }
+
+        for (int i = 0; i < numberButtons.Length; i++)
+        {
+            int digit = i + 1;
+            bool isDone = digit <= 9 && counts[digit] >= 9;
+            numberCompleted[i] = isDone;
+
+            if (numberButtons[i] != null)
+                numberButtons[i].interactable = !isDone;
+        }
+
+        UpdateKeypadColorsForNotesMode();
     }
 
     // The Note button itself scales up while Note Mode is active, and
@@ -391,6 +441,7 @@ public class SudokuGameManager : MonoBehaviour
 
         int correctVal = solutionGrid[selected.Row, selected.Col];
         selected.SetFixedNumber(correctVal);
+        UpdateCompletedNumbers();
         CheckWinCondition();
     }
 
