@@ -1,6 +1,7 @@
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
+using TMPro;
 using DG.Tweening;
 
 public class UIManager : MonoBehaviour
@@ -24,6 +25,26 @@ public class UIManager : MonoBehaviour
     [SerializeField] private Button mediumPoster;
     [SerializeField] private Button hardPoster;
 
+    [Header("Settings Panel")]
+    [SerializeField] private GameObject settingsPanel;
+    [SerializeField] private Button closeSettingsButton;
+
+    [Header("Settings - Sound / Music Toggle Buttons")]
+    [Tooltip("Each toggle button has ToggleBG -> ON circle, OFF circle as children. Only one is active at a time.")]
+    [SerializeField] private Button musicToggleButton;
+    [SerializeField] private GameObject musicOnCircle;
+    [SerializeField] private GameObject musicOffCircle;
+    [SerializeField] private TMP_Text musicStatusLabel;
+
+    [SerializeField] private Button sfxToggleButton;
+    [SerializeField] private GameObject sfxOnCircle;
+    [SerializeField] private GameObject sfxOffCircle;
+    [SerializeField] private TMP_Text sfxStatusLabel;
+
+    [Header("Settings - Language")]
+    [SerializeField] private TMP_Dropdown languageDropdown;
+    [SerializeField] private TMP_Text languageLabel;
+
     [Header("Scene Names")]
     [SerializeField] private string gameSceneName = "GameScene";
 
@@ -44,6 +65,10 @@ public class UIManager : MonoBehaviour
 
     private Tween playButtonPulseTween;
     private Sequence difficultyPanelSequence;
+    private Sequence settingsPanelSequence;
+
+    private bool isMusicOn = true;
+    private bool isSfxOn = true;
 
     private void Awake()
     {
@@ -63,6 +88,15 @@ public class UIManager : MonoBehaviour
             difficultyPanel.transform.localScale = Vector3.one;
             difficultyPanel.SetActive(false);
         }
+
+        if (settingsPanel != null)
+        {
+            settingsPanel.transform.localScale = Vector3.one;
+            settingsPanel.SetActive(false);
+        }
+
+        SyncLanguageLabel();
+        SyncToggleVisualsFromSoundManager();
 
         RegisterListeners();
 
@@ -94,17 +128,33 @@ public class UIManager : MonoBehaviour
         if (mediumPoster != null) mediumPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Medium));
         if (hardPoster != null) hardPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Hard));
 
-        // settingsButton / aboutButton onClick hooked up to your own panels if you have them.
-        // They're only toggled active/inactive here, per the flow you described.
+        if (settingsButton != null) settingsButton.onClick.AddListener(OnSettingsClicked);
+        if (closeSettingsButton != null) closeSettingsButton.onClick.AddListener(OnCloseSettingsClicked);
+
+        if (musicToggleButton != null) musicToggleButton.onClick.AddListener(OnMusicToggleClicked);
+        if (sfxToggleButton != null) sfxToggleButton.onClick.AddListener(OnSfxToggleClicked);
+
+        if (languageDropdown != null) languageDropdown.onValueChanged.AddListener(OnLanguageChanged);
+
+        // aboutButton onClick hooked up to your own panel if you have one.
     }
 
     private void OnDestroy()
     {
         playButtonPulseTween?.Kill();
         difficultyPanelSequence?.Kill();
+        settingsPanelSequence?.Kill();
 
         if (playButton != null) playButton.onClick.RemoveListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.RemoveListener(OnBackClicked);
+
+        if (settingsButton != null) settingsButton.onClick.RemoveListener(OnSettingsClicked);
+        if (closeSettingsButton != null) closeSettingsButton.onClick.RemoveListener(OnCloseSettingsClicked);
+
+        if (musicToggleButton != null) musicToggleButton.onClick.RemoveListener(OnMusicToggleClicked);
+        if (sfxToggleButton != null) sfxToggleButton.onClick.RemoveListener(OnSfxToggleClicked);
+
+        if (languageDropdown != null) languageDropdown.onValueChanged.RemoveListener(OnLanguageChanged);
     }
 
     // ---------------- Play Button Pulse ----------------
@@ -200,6 +250,118 @@ public class UIManager : MonoBehaviour
         CanvasGroup cg = go.GetComponent<CanvasGroup>();
         if (cg == null) cg = go.AddComponent<CanvasGroup>();
         return cg;
+    }
+
+    // ---------------- Settings Panel ----------------
+
+    private void OnSettingsClicked()
+    {
+        // Reflect current audio state on the switches each time the panel opens.
+        SyncToggleVisualsFromSoundManager();
+
+        ShowSettingsPanel();
+    }
+
+    private void OnCloseSettingsClicked()
+    {
+        HideSettingsPanel();
+    }
+
+    private void ShowSettingsPanel()
+    {
+        if (settingsPanel == null) return;
+
+        settingsPanelSequence?.Kill();
+
+        settingsPanel.SetActive(true);
+        settingsPanel.transform.localScale = Vector3.zero;
+
+        CanvasGroup cg = GetOrAddCanvasGroup(settingsPanel);
+        cg.alpha = 0f;
+
+        settingsPanelSequence = DOTween.Sequence()
+            .Append(settingsPanel.transform.DOScale(1f, panelAnimDuration).SetEase(Ease.OutBack))
+            .Join(cg.DOFade(1f, panelAnimDuration))
+            .SetLink(settingsPanel);
+    }
+
+    private void HideSettingsPanel()
+    {
+        if (settingsPanel == null) return;
+
+        settingsPanelSequence?.Kill();
+
+        CanvasGroup cg = GetOrAddCanvasGroup(settingsPanel);
+
+        settingsPanelSequence = DOTween.Sequence()
+            .Append(settingsPanel.transform.DOScale(0f, panelAnimDuration).SetEase(Ease.InBack))
+            .Join(cg.DOFade(0f, panelAnimDuration))
+            .OnComplete(() => settingsPanel.SetActive(false))
+            .SetLink(settingsPanel);
+    }
+
+    // ---------------- Settings - Sound / Music Switches ----------------
+
+    // Reads SoundManager's current mute state and updates both switches to
+    // match, without going through OnMusicToggleClicked / OnSfxToggleClicked
+    // (so it never re-triggers SetMusicMuted/SetSfxMuted).
+    private void SyncToggleVisualsFromSoundManager()
+    {
+        isMusicOn = SoundManager.Instance == null || !SoundManager.Instance.IsMusicMuted;
+        isSfxOn = SoundManager.Instance == null || !SoundManager.Instance.IsSfxMuted;
+
+        ApplyToggleVisual(isMusicOn, musicOnCircle, musicOffCircle);
+        ApplyToggleVisual(isSfxOn, sfxOnCircle, sfxOffCircle);
+
+        SetStatusLabel(musicStatusLabel, isMusicOn);
+        SetStatusLabel(sfxStatusLabel, isSfxOn);
+    }
+
+    private void OnMusicToggleClicked()
+    {
+        isMusicOn = !isMusicOn;
+        ApplyToggleVisual(isMusicOn, musicOnCircle, musicOffCircle);
+        SetStatusLabel(musicStatusLabel, isMusicOn);
+        SoundManager.Instance?.SetMusicMuted(!isMusicOn);
+    }
+
+    private void OnSfxToggleClicked()
+    {
+        isSfxOn = !isSfxOn;
+        ApplyToggleVisual(isSfxOn, sfxOnCircle, sfxOffCircle);
+        SetStatusLabel(sfxStatusLabel, isSfxOn);
+        SoundManager.Instance?.SetSfxMuted(!isSfxOn);
+    }
+
+    private void SetStatusLabel(TMP_Text label, bool on)
+    {
+        if (label != null) label.text = on ? "ON" : "OFF";
+    }
+
+    // ON: activate the ON object, deactivate the OFF object.
+    // OFF: activate the OFF object, deactivate the ON object.
+    private void ApplyToggleVisual(bool on, GameObject onCircle, GameObject offCircle)
+    {
+        if (onCircle != null) onCircle.SetActive(on);
+        if (offCircle != null) offCircle.SetActive(!on);
+    }
+
+    // ---------------- Settings - Language ----------------
+
+    // Keeps the label beside the dropdown in sync with whatever option is
+    // currently selected, both on scene load and on every selection change.
+    private void OnLanguageChanged(int index)
+    {
+        SyncLanguageLabel();
+    }
+
+    private void SyncLanguageLabel()
+    {
+        if (languageDropdown == null || languageLabel == null) return;
+        if (languageDropdown.options == null || languageDropdown.options.Count == 0) return;
+
+        int index = Mathf.Clamp(languageDropdown.value, 0, languageDropdown.options.Count - 1);
+        languageLabel.text = languageDropdown.options[index].text;
     }
 
     // ---------------- Difficulty Selection -> Game Scene ----------------
