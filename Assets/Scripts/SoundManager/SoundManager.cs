@@ -87,7 +87,17 @@ public class SoundManager : MonoBehaviour
 
     public void PlayMusic(string id, bool fade = true, float fadeDuration = 1f)
     {
-        if (library == null || musicSource == null) return;
+        if (library == null)
+        {
+            Debug.LogWarning("SoundManager: 'library' is not assigned in the Inspector — cannot play music.");
+            return;
+        }
+
+        if (musicSource == null)
+        {
+            Debug.LogWarning("SoundManager: 'musicSource' is not assigned in the Inspector — cannot play music.");
+            return;
+        }
 
         SoundLibrary.MusicEntry track = library.GetMusic(id);
         if (track == null)
@@ -148,7 +158,11 @@ public class SoundManager : MonoBehaviour
 
     public void PlaySFX(string id)
     {
-        if (library == null) return;
+        if (library == null)
+        {
+            Debug.LogWarning("SoundManager: 'library' is not assigned in the Inspector — cannot play SFX.");
+            return;
+        }
         if (sfxMuted) return;
 
         SoundLibrary.SFXEntry sfx = library.GetSFX(id);

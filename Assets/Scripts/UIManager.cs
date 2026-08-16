@@ -98,7 +98,7 @@ public class UIManager : MonoBehaviour
         SyncLanguageLabel();
         SyncToggleVisualsFromSoundManager();
 
-        SoundManager.Instance.PlayMusic("MenuMusic");
+        SoundManager.Instance?.PlayMusic("MenuMusic");
 
         RegisterListeners();
 

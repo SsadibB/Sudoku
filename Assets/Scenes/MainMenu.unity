@@ -7045,7 +7045,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: f704cb258ed5bcf41a6bbd201bad1d20, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::SoundManager
-  library: {fileID: 0}
+  library: {fileID: 11400000, guid: 5e6527400371f404ea58e61df1feeac8, type: 2}
   musicSource: {fileID: 2099323573}
   sfxPoolSize: 8
 --- !u!1 &2126248235

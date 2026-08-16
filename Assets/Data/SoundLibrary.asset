@@ -12,5 +12,15 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 19426b497750a5b4c890be9f5d543bf9, type: 3}
   m_Name: SoundLibrary
   m_EditorClassIdentifier: Assembly-CSharp::SoundLibrary
-  musicTracks: []
-  sfxEntries: []
+  musicTracks:
+  - id: MenuMusic
+    clip: {fileID: 8300000, guid: 815eddf7894017a44a6316bf5851abf8, type: 3}
+    volume: 1
+    loop: 1
+  sfxEntries:
+  - id: Button
+    clips:
+    - {fileID: 8300000, guid: 1b77b1d1799566445b001c0bb4ae5547, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
