@@ -46,19 +46,19 @@ MonoBehaviour:
   - id: EasyButton
     clips:
     - {fileID: 8300000, guid: ae443a4d3e1b11c40a329f07ce9cf589, type: 3}
-    volume: 1
+    volume: 0.7
     minPitch: 1
     maxPitch: 2
   - id: MediumButton
     clips:
     - {fileID: 8300000, guid: ff7720bf43b1f9d43a4de153c1c64ca7, type: 3}
-    volume: 1
+    volume: 0.7
     minPitch: 1
     maxPitch: 2
   - id: HardButton
     clips:
     - {fileID: 8300000, guid: c18bdb81c34d8334697ca9c07918cf0c, type: 3}
-    volume: 1
+    volume: 0.7
     minPitch: 1
     maxPitch: 2
   - id: GameOver
@@ -73,7 +73,7 @@ MonoBehaviour:
   - id: Wrong
     clips:
     - {fileID: 8300000, guid: cf15a3220d22c40409ffc13998b28a6a, type: 3}
-    volume: 1
+    volume: 0.5
     minPitch: 1
     maxPitch: 2
   - id: Right
@@ -92,8 +92,8 @@ MonoBehaviour:
     clips:
     - {fileID: 8300000, guid: 2aa11fde8fa7967429f44128af88c59b, type: 3}
     volume: 1
-    minPitch: 1
-    maxPitch: 2
+    minPitch: 0
+    maxPitch: 0
   - id: Hint
     clips:
     - {fileID: 8300000, guid: 8ca6dd9821d74b44b88c901963e64913, type: 3}
@@ -109,6 +109,15 @@ MonoBehaviour:
   - id: Erase
     clips:
     - {fileID: 8300000, guid: 00936deb17e8f4b4a9539ebb42715e2e, type: 3}
+    volume: 1
+    minPitch: 1
+    maxPitch: 2
+  - id: Victory
+    clips:
+    - {fileID: 8300000, guid: cefb10e00d7578c4181e8f3a76e0c179, type: 3}
+    - {fileID: 8300000, guid: 5084fb9bebdda50459590c55f9f776e4, type: 3}
+    - {fileID: 8300000, guid: b82b5f5c72e3f434db42499f69927699, type: 3}
+    - {fileID: 8300000, guid: cd83b49527fec7f4086d836099530b7b, type: 3}
     volume: 1
     minPitch: 1
     maxPitch: 2

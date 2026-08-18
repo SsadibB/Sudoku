@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
 using UnityEngine.UI;
@@ -94,6 +95,25 @@ public class UIManager : MonoBehaviour
     private bool isMusicOn = true;
     private bool isSfxOn = true;
 
+    // Dropdown option labels, in the same order as the Language enum.
+    // Each language's own name is always shown in that language, so the
+    // dropdown stays readable no matter which language is currently active.
+    private static readonly string[] LanguageNativeNames =
+    {
+        "English",   // Language.English
+        "日本語",     // Language.Japanese
+        "Español",   // Language.Spanish
+        "Português", // Language.Portuguese
+        "বাংলা",      // Language.Bangla
+        "한국어",     // Language.Korean
+        "中文"        // Language.Chinese
+    };
+
+    // Source (English) text for the toggle labels — translated live via
+    // LocalizationManager, same as everything else.
+    private const string OnText = "ON";
+    private const string OffText = "OFF";
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
@@ -119,12 +139,16 @@ public class UIManager : MonoBehaviour
             settingsPanel.SetActive(false);
         }
 
+        SetupLanguageDropdown();
         SyncLanguageLabel();
         SyncToggleVisualsFromSoundManager();
 
         SoundManager.Instance?.PlayMusic("MenuMusic");
 
         RegisterListeners();
+
+        if (LocalizationManager.Instance != null)
+            LocalizationManager.Instance.OnLanguageChanged += RefreshLocalizedLabels;
 
         if (PlayerPrefs.GetInt(OpenDifficultyOnLoadKey, 0) == 1)
         {
@@ -181,6 +205,9 @@ public class UIManager : MonoBehaviour
         if (sfxToggleButton != null) sfxToggleButton.onClick.RemoveListener(OnSfxToggleClicked);
 
         if (languageDropdown != null) languageDropdown.onValueChanged.RemoveListener(OnLanguageChanged);
+
+        if (LocalizationManager.Instance != null)
+            LocalizationManager.Instance.OnLanguageChanged -= RefreshLocalizedLabels;
     }
 
     // ---------------- Play Button Pulse ----------------
@@ -374,7 +401,20 @@ public class UIManager : MonoBehaviour
 
     private void SetStatusLabel(TMP_Text label, bool on)
     {
-        if (label != null) label.text = on ? "ON" : "OFF";
+        if (label == null) return;
+
+        string source = on ? OnText : OffText;
+        label.text = LocalizationManager.Instance != null
+            ? LocalizationManager.Instance.Translate(source)
+            : source;
+    }
+
+    // Re-applies ON/OFF text in the current language. Needed because these
+    // two labels are set directly in code rather than via LocalizedText.
+    private void RefreshLocalizedLabels()
+    {
+        SetStatusLabel(musicStatusLabel, isMusicOn);
+        SetStatusLabel(sfxStatusLabel, isSfxOn);
     }
 
     // ON: activate the ON object, deactivate the OFF object.
@@ -389,8 +429,27 @@ public class UIManager : MonoBehaviour
 
     // Keeps the label beside the dropdown in sync with whatever option is
     // currently selected, both on scene load and on every selection change.
+    // Fills the dropdown with the 7 supported languages and selects
+    // whichever one is currently active (from the saved PlayerPrefs
+    // selection), without firing OnLanguageChanged in the process.
+    private void SetupLanguageDropdown()
+    {
+        if (languageDropdown == null) return;
+
+        languageDropdown.ClearOptions();
+        languageDropdown.AddOptions(new List<string>(LanguageNativeNames));
+
+        int current = LocalizationManager.Instance != null ? (int)LocalizationManager.Instance.CurrentLanguage : 0;
+        languageDropdown.SetValueWithoutNotify(current);
+    }
+
     private void OnLanguageChanged(int index)
     {
+        PlayButtonSfx();
+
+        if (LocalizationManager.Instance != null)
+            LocalizationManager.Instance.SetLanguage((Language)index);
+
         SyncLanguageLabel();
     }
 
