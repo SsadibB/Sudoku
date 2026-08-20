@@ -1,0 +1,44 @@
+Font:   Style: 
+Point Size: 0   Padding: 0   SP/PD Ratio: NaN
+
+Characters included: 10353/21296
+Missing characters: 32
+Excluded characters: 0
+
+Characters missing from font file:
+----------------------------------------
+ID: 40944	Hex: 9FF0	Char [鿰]
+ID: 40945	Hex: 9FF1	Char [鿱]
+ID: 40946	Hex: 9FF2	Char [鿲]
+ID: 40947	Hex: 9FF3	Char [鿳]
+ID: 40948	Hex: 9FF4	Char [鿴]
+ID: 40949	Hex: 9FF5	Char [鿵]
+ID: 40950	Hex: 9FF6	Char [鿶]
+ID: 40951	Hex: 9FF7	Char [鿷]
+ID: 40952	Hex: 9FF8	Char [鿸]
+ID: 40953	Hex: 9FF9	Char [鿹]
+ID: 40954	Hex: 9FFA	Char [鿺]
+ID: 40955	Hex: 9FFB	Char [鿻]
+ID: 40956	Hex: 9FFC	Char [鿼]
+ID: 40957	Hex: 9FFD	Char [鿽]
+ID: 40958	Hex: 9FFE	Char [鿾]
+ID: 40959	Hex: 9FFF	Char [鿿]
+ID: 65280	Hex: FF00	Char [＀]
+ID: 65440	Hex: FFA0	Char [ﾠ]
+ID: 65471	Hex: FFBF	Char [﾿]
+ID: 65472	Hex: FFC0	Char [￀]
+ID: 65473	Hex: FFC1	Char [￁]
+ID: 65480	Hex: FFC8	Char [￈]
+ID: 65481	Hex: FFC9	Char [￉]
+ID: 65488	Hex: FFD0	Char [￐]
+ID: 65489	Hex: FFD1	Char [￑]
+ID: 65496	Hex: FFD8	Char [￘]
+ID: 65497	Hex: FFD9	Char [￙]
+ID: 65501	Hex: FFDD	Char [￝]
+ID: 65502	Hex: FFDE	Char [￞]
+ID: 65503	Hex: FFDF	Char [￟]
+ID: 65511	Hex: FFE7	Char [￧]
+ID: 65519	Hex: FFEF	Char [￯]
+
+Characters excluded from packing:
+----------------------------------------
