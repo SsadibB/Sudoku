@@ -12206,14 +12206,14 @@ MonoBehaviour:
     bangla: "\u09B8\u0982\u0995\u09C7\u09A4"
     korean: "\uD78C\uD2B8"
     chinese: "\u63D0\u793A"
-  - english: YES
+  - english: Yes
     japanese: "\u306F\u3044"
     spanish: "S\xCD"
     portuguese: SIM
     bangla: "\u09B9\u09CD\u09AF\u09BE\u0981"
     korean: "\uC608"
     chinese: "\u662F"
-  - english: NO
+  - english: No
     japanese: "\u3044\u3044\u3048"
     spanish: NO
     portuguese: "N\xC3O"
