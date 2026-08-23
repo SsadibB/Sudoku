@@ -56,6 +56,16 @@ public class UIManager : MonoBehaviour
     [Header("Panel Animation Settings")]
     [SerializeField] private float panelAnimDuration = 0.35f;
 
+    // ---- NEW: Currency / Profile Display (all optional — leave unassigned
+    // if this scene doesn't show them) ----
+    [Header("Currency / Profile Display (Optional)")]
+    [SerializeField] private TMP_Text coinsLabel;
+    [SerializeField] private TMP_Text profileLevelLabel;
+    [Tooltip("An Image with Image Type = Filled, used as the XP progress bar.")]
+    [SerializeField] private Image profileXPFillImage;
+    [Tooltip("e.g. shows '15,000/20,000'.")]
+    [SerializeField] private TMP_Text profileXPLabel;
+
     // Key used to pass the chosen difficulty to the game scene
     public const string DifficultyPrefKey = "SelectedDifficulty";
 
@@ -143,6 +153,13 @@ public class UIManager : MonoBehaviour
         SyncLanguageLabel();
         SyncToggleVisualsFromSoundManager();
 
+        // ---- NEW: Currency / Profile Display ----
+        RefreshCoinsDisplay(CoinManager.Instance != null ? CoinManager.Instance.TotalCoins : 0);
+        RefreshProfileDisplay();
+
+        if (CoinManager.Instance != null) CoinManager.Instance.OnCoinsChanged += RefreshCoinsDisplay;
+        if (ProfileLevelManager.Instance != null) ProfileLevelManager.Instance.OnXPChanged += HandleProfileXPChanged;
+
         SoundManager.Instance?.PlayMusic("MenuMusic");
 
         RegisterListeners();
@@ -208,6 +225,10 @@ public class UIManager : MonoBehaviour
 
         if (LocalizationManager.Instance != null)
             LocalizationManager.Instance.OnLanguageChanged -= RefreshLocalizedLabels;
+
+        // ---- NEW: Currency / Profile Display ----
+        if (CoinManager.Instance != null) CoinManager.Instance.OnCoinsChanged -= RefreshCoinsDisplay;
+        if (ProfileLevelManager.Instance != null) ProfileLevelManager.Instance.OnXPChanged -= HandleProfileXPChanged;
     }
 
     // ---------------- Play Button Pulse ----------------
@@ -460,6 +481,31 @@ public class UIManager : MonoBehaviour
 
         int index = Mathf.Clamp(languageDropdown.value, 0, languageDropdown.options.Count - 1);
         languageLabel.text = languageDropdown.options[index].text;
+    }
+
+    // ---------------- Currency / Profile Display ----------------
+
+    private void RefreshCoinsDisplay(int totalCoins)
+    {
+        if (coinsLabel != null) coinsLabel.text = totalCoins.ToString("N0");
+    }
+
+    private void RefreshProfileDisplay()
+    {
+        if (ProfileLevelManager.Instance == null) return;
+
+        HandleProfileXPChanged(
+            ProfileLevelManager.Instance.CurrentXP,
+            ProfileLevelManager.Instance.XPRequiredForCurrentLevel,
+            ProfileLevelManager.Instance.ProfileLevel);
+    }
+
+    private void HandleProfileXPChanged(int currentXP, int xpRequired, int level)
+    {
+        if (profileLevelLabel != null) profileLevelLabel.text = $"Level. {level}";
+        if (profileXPLabel != null) profileXPLabel.text = $"{currentXP:N0}/{xpRequired:N0}";
+        if (profileXPFillImage != null)
+            profileXPFillImage.fillAmount = xpRequired > 0 ? Mathf.Clamp01((float)currentXP / xpRequired) : 0f;
     }
 
     // ---------------- Difficulty Selection -> Game Scene ----------------

@@ -10526,7 +10526,7 @@ GameObject:
   - component: {fileID: 1763705102}
   - component: {fileID: 1763705101}
   m_Layer: 0
-  m_Name: ProfilePictureManager
+  m_Name: ProfileManager
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -11965,6 +11965,9 @@ GameObject:
   - component: {fileID: 2099323574}
   - component: {fileID: 2099323573}
   - component: {fileID: 2099323575}
+  - component: {fileID: 2099323578}
+  - component: {fileID: 2099323577}
+  - component: {fileID: 2099323576}
   m_Layer: 0
   m_Name: SoundManager
   m_TagString: Untagged
@@ -12294,6 +12297,44 @@ MonoBehaviour:
     bangla: "\u09AA\u09B0\u09CD\u09A4\u09C1\u0997\u09BF\u099C"
     korean: "\uD3EC\uB974\uD22C\uAC08\uC5B4"
     chinese: "\u8461\u8404\u7259\u8BED"
+--- !u!114 &2099323576
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2099323571}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3790a177edb539e419af3e5f703e538f, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::ProfileLevelManager
+  baseXPRequired: 100
+  xpIncreasePerLevel: 50
+--- !u!114 &2099323577
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2099323571}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 9af9fefa3c951ed4591e97439f1373f9, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::CoinManager
+--- !u!114 &2099323578
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 2099323571}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 3c113a336371e7c49a4d16632bdcb64a, type: 3}
+  m_Name: 
+  m_EditorClassIdentifier: Assembly-CSharp::LevelManager
 --- !u!1 &2126248235
 GameObject:
   m_ObjectHideFlags: 0

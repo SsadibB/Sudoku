@@ -5,6 +5,7 @@ using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 using UnityEngine.InputSystem;
+using TMPro;
 using DG.Tweening;
 
 public class SudokuGameManager : MonoBehaviour
@@ -60,6 +61,25 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private float randomSfxMinInterval = 15f;
     [SerializeField] private float randomSfxMaxInterval = 30f;
 
+    // ---- NEW: Level Progression ----
+    [Header("Level Progression")]
+    [Tooltip("Optional in-game header label, e.g. shows 'Level 35'.")]
+    [SerializeField] private TMP_Text levelHeaderText;
+
+    // ---- NEW: Coin Rewards ----
+    [Header("Coin Rewards")]
+    [SerializeField] private int coinsPerCorrectNumber = 5;
+    [SerializeField] private int coinsPerRowComplete = 10;
+    [SerializeField] private int coinsPerColumnComplete = 10;
+    [SerializeField] private int coinsPerBoxComplete = 20;
+    [SerializeField] private int coinsPerBoardComplete = 200;
+
+    // ---- NEW: Profile XP Rewards ----
+    [Header("Profile XP Rewards (granted once, on board complete)")]
+    [SerializeField] private int profileXPEasy = 20;
+    [SerializeField] private int profileXPMedium = 40;
+    [SerializeField] private int profileXPHard = 80;
+
     private Coroutine randomSfxCoroutine;
 
     private int[,] solutionGrid;
@@ -67,6 +87,10 @@ public class SudokuGameManager : MonoBehaviour
     private bool isGameActive;
     private bool notesMode;
     private UIManager.Difficulty currentDifficulty;
+
+    // Which Level (1-1000) of currentDifficulty is currently being played.
+    private int currentLevel;
+    public int CurrentLevel => currentLevel;
 
     private Sequence outputPanelSequence;
 
@@ -77,6 +101,13 @@ public class SudokuGameManager : MonoBehaviour
     // Index i tracks whether digit (i + 1) has all 9 of its correct
     // placements filled on the board — used to gray out that keypad button.
     private bool[] numberCompleted;
+
+    // Row/Column/3x3-Box completion coins fire once each, per game — these
+    // track which sections have already paid out so re-checking an already-
+    // complete section (e.g. after a later move elsewhere) doesn't double-pay.
+    private bool[] rowCoinAwarded;
+    private bool[] colCoinAwarded;
+    private bool[] boxCoinAwarded;
 
     private struct CellMove
     {
@@ -123,7 +154,14 @@ public class SudokuGameManager : MonoBehaviour
             currentDifficulty = UIManager.Difficulty.Easy;
         }
 
-        StartNewGame(currentDifficulty);
+        // Which level to open: a level-select screen may have queued a
+        // specific level via LevelManager.SetSelectedLevel(); otherwise we
+        // continue at the first not-yet-completed level for this difficulty.
+        int level = LevelManager.Instance != null
+            ? LevelManager.Instance.ConsumeSelectedLevel(currentDifficulty)
+            : 1;
+
+        StartNewGame(currentDifficulty, level);
     }
 
     private void Update()
@@ -222,12 +260,25 @@ public class SudokuGameManager : MonoBehaviour
         if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.RemoveListener(OnRestartConfirmNoClicked);
     }
 
+    // Starts a game at whichever level the player should "Continue" on for
+    // this difficulty. Used by the in-scene difficulty posters / restart
+    // flow, where no specific level was chosen.
     public void StartNewGame(UIManager.Difficulty difficulty)
     {
+        int level = LevelManager.Instance != null ? LevelManager.Instance.GetContinueLevel(difficulty) : 1;
+        StartNewGame(difficulty, level);
+    }
+
+    public void StartNewGame(UIManager.Difficulty difficulty, int level)
+    {
         currentDifficulty = difficulty;
+        currentLevel = Mathf.Clamp(level, 1, LevelManager.MaxLevel);
         undoStack.Clear();
+        ResetCoinAwardTracking();
 
         (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty);
+
+        if (levelHeaderText != null) levelHeaderText.text = $"Level {currentLevel}";
 
         if (gridLayout != null)
         {
@@ -259,6 +310,13 @@ public class SudokuGameManager : MonoBehaviour
 
         SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(difficulty));
         StartRandomSfxLoop();
+    }
+
+    private void ResetCoinAwardTracking()
+    {
+        rowCoinAwarded = new bool[9];
+        colCoinAwarded = new bool[9];
+        boxCoinAwarded = new bool[9];
     }
 
     private void StartRandomSfxLoop()
@@ -316,6 +374,11 @@ public class SudokuGameManager : MonoBehaviour
             // stack (nothing to undo back to) and can't be erased.
             selected.LockAsCorrect(number);
             selected.GlowNumber();
+
+            // ---- NEW: Coin Rewards ----
+            CoinManager.Instance?.AddCoins(coinsPerCorrectNumber);
+            CheckSectionCompletion(row, col);
+
             UpdateCompletedNumbers();
             CheckWinCondition();
         }
@@ -343,6 +406,73 @@ public class SudokuGameManager : MonoBehaviour
                 }
             }
         }
+    }
+
+    // ---- NEW: Row / Column / 3x3 Box completion coins ----
+    // Called right after a correct placement (and after a hint fills a
+    // cell). Awards each section's coin bonus exactly once, the moment it
+    // becomes fully correct.
+    private void CheckSectionCompletion(int row, int col)
+    {
+        if (gridLayout == null || rowCoinAwarded == null) return;
+
+        if (!rowCoinAwarded[row] && IsRowComplete(row))
+        {
+            rowCoinAwarded[row] = true;
+            CoinManager.Instance?.AddCoins(coinsPerRowComplete);
+        }
+
+        if (!colCoinAwarded[col] && IsColumnComplete(col))
+        {
+            colCoinAwarded[col] = true;
+            CoinManager.Instance?.AddCoins(coinsPerColumnComplete);
+        }
+
+        int boxIndex = (row / 3) * 3 + (col / 3);
+        if (!boxCoinAwarded[boxIndex] && IsBoxComplete(boxIndex))
+        {
+            boxCoinAwarded[boxIndex] = true;
+            CoinManager.Instance?.AddCoins(coinsPerBoxComplete);
+        }
+    }
+
+    private bool IsRowComplete(int row)
+    {
+        for (int c = 0; c < 9; c++)
+        {
+            SudokuCell cell = gridLayout.Cells[row, c];
+            if (cell == null || cell.GetNumber() != solutionGrid[row, c] || !cell.IsCorrect)
+                return false;
+        }
+        return true;
+    }
+
+    private bool IsColumnComplete(int col)
+    {
+        for (int r = 0; r < 9; r++)
+        {
+            SudokuCell cell = gridLayout.Cells[r, col];
+            if (cell == null || cell.GetNumber() != solutionGrid[r, col] || !cell.IsCorrect)
+                return false;
+        }
+        return true;
+    }
+
+    private bool IsBoxComplete(int boxIndex)
+    {
+        int boxRowStart = (boxIndex / 3) * 3;
+        int boxColStart = (boxIndex % 3) * 3;
+
+        for (int r = boxRowStart; r < boxRowStart + 3; r++)
+        {
+            for (int c = boxColStart; c < boxColStart + 3; c++)
+            {
+                SudokuCell cell = gridLayout.Cells[r, c];
+                if (cell == null || cell.GetNumber() != solutionGrid[r, c] || !cell.IsCorrect)
+                    return false;
+            }
+        }
+        return true;
     }
 
     // The color a button should show normally: gray if that digit is fully
@@ -488,6 +618,12 @@ public class SudokuGameManager : MonoBehaviour
 
         int correctVal = solutionGrid[selected.Row, selected.Col];
         selected.SetFixedNumber(correctVal);
+
+        // A hint doesn't pay the "correct number" coin bonus (the player
+        // didn't solve it themselves), but it can still complete a row/
+        // column/box, so those bonuses still fire normally.
+        CheckSectionCompletion(selected.Row, selected.Col);
+
         UpdateCompletedNumbers();
         CheckWinCondition();
     }
@@ -510,7 +646,24 @@ public class SudokuGameManager : MonoBehaviour
 
         // Victory!
         isGameActive = false;
+
+        // ---- NEW: Board-complete coins, Profile XP, Level unlock ----
+        CoinManager.Instance?.AddCoins(coinsPerBoardComplete);
+        ProfileLevelManager.Instance?.AddXP(GetProfileXPForDifficulty(currentDifficulty));
+        LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
+
         ShowOutputPanel(isVictory: true);
+    }
+
+    private int GetProfileXPForDifficulty(UIManager.Difficulty difficulty)
+    {
+        switch (difficulty)
+        {
+            case UIManager.Difficulty.Easy: return profileXPEasy;
+            case UIManager.Difficulty.Medium: return profileXPMedium;
+            case UIManager.Difficulty.Hard: return profileXPHard;
+            default: return profileXPEasy;
+        }
     }
 
     private void HandleGameOver()
