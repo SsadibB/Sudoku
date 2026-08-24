@@ -461,6 +461,69 @@ public class ProfileManager : MonoBehaviour
         RefreshStatsDisplay();
     }
 
+    // ==================== Cloud sync (PlayFab) ====================
+
+    // Called by SudokuPlayFabManager after login, with whatever values
+    // came back from the cloud. Every field is merged by taking the max
+    // against the current local value — same reasoning as
+    // CoinManager.ApplyCloudValue / LevelManager.ApplyCloudProgress, so a
+    // device that's behind can never roll back progress.
+    //
+    // Profile Level/XP is a pair (XP only means anything relative to its
+    // own level), so it's merged as a pair: whichever side has the higher
+    // ProfileLevel wins outright; if levels are tied, the higher XP wins.
+    //
+    // easyHigh/mediumHigh/hardHigh let the caller pass all three
+    // difficulties' high scores in one call.
+    public void ApplyCloudStats(int cloudProfileLevel, int cloudXP, int cloudPuzzlesSolved,
+        int cloudBestWinStreak, int easyHigh, int mediumHigh, int hardHigh)
+    {
+        bool changed = false;
+
+        if (cloudProfileLevel > ProfileLevel ||
+            (cloudProfileLevel == ProfileLevel && cloudXP > CurrentXP))
+        {
+            ProfileLevel = Mathf.Max(1, cloudProfileLevel);
+            CurrentXP = Mathf.Max(0, cloudXP);
+            changed = true;
+        }
+
+        if (cloudPuzzlesSolved > TotalPuzzlesSolved)
+        {
+            TotalPuzzlesSolved = cloudPuzzlesSolved;
+            PlayerPrefs.SetInt(PuzzlesSolvedKey, TotalPuzzlesSolved);
+            changed = true;
+        }
+
+        if (cloudBestWinStreak > BestWinStreak)
+        {
+            BestWinStreak = cloudBestWinStreak;
+            PlayerPrefs.SetInt(BestStreakKey, BestWinStreak);
+            changed = true;
+        }
+
+        ApplyCloudHighScore(UIManager.Difficulty.Easy, easyHigh);
+        ApplyCloudHighScore(UIManager.Difficulty.Medium, mediumHigh);
+        ApplyCloudHighScore(UIManager.Difficulty.Hard, hardHigh);
+
+        if (changed)
+        {
+            SaveProfileLevel();
+            PlayerPrefs.Save();
+            OnXPChanged?.Invoke(CurrentXP, GetXPRequiredForLevel(ProfileLevel), ProfileLevel);
+            RefreshStatsDisplay();
+        }
+    }
+
+    private void ApplyCloudHighScore(UIManager.Difficulty difficulty, int cloudScore)
+    {
+        if (cloudScore > GetHighScore(difficulty))
+        {
+            PlayerPrefs.SetInt(HighScoreKey(difficulty), cloudScore);
+            PlayerPrefs.Save();
+        }
+    }
+
     // ==================== Game Stats (UI) ====================
 
     // Pushes the current stat values into the panel's TMP texts. Called

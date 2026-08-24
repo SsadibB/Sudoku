@@ -107,4 +107,24 @@ public class LevelManager : MonoBehaviour
 
         return level >= 1 ? Mathf.Clamp(level, 1, MaxLevel) : GetContinueLevel(difficulty);
     }
+
+    // ==================== Cloud sync (PlayFab) ====================
+
+    // Called by SudokuPlayFabManager after login, once per difficulty,
+    // with whatever "highest completed" value came back from the cloud.
+    // Merge-by-max, same reasoning as CoinManager.ApplyCloudValue — a
+    // stale/new device should never roll back progress made elsewhere.
+    // Returns the resulting (post-merge) value.
+    public int ApplyCloudProgress(UIManager.Difficulty difficulty, int cloudHighestCompleted)
+    {
+        int current = GetHighestCompleted(difficulty);
+        if (cloudHighestCompleted > current)
+        {
+            int clamped = Mathf.Clamp(cloudHighestCompleted, 0, MaxLevel);
+            PlayerPrefs.SetInt(CompletedKey(difficulty), clamped);
+            PlayerPrefs.Save();
+            return clamped;
+        }
+        return current;
+    }
 }

@@ -59,4 +59,22 @@ public class CoinManager : MonoBehaviour
         PlayerPrefs.SetInt(CoinsKey, TotalCoins);
         PlayerPrefs.Save();
     }
+
+    // ==================== Cloud sync (PlayFab) ====================
+
+    // Called by SudokuPlayFabManager after login, with whatever value came
+    // back from the cloud. Merges by taking the max so a device that's
+    // behind never overwrites/loses coins the player already earned
+    // elsewhere. Returns the resulting (post-merge) total so the caller
+    // can push it back up if the cloud was actually behind.
+    public int ApplyCloudValue(int cloudCoins)
+    {
+        if (cloudCoins > TotalCoins)
+        {
+            TotalCoins = cloudCoins;
+            Save();
+            OnCoinsChanged?.Invoke(TotalCoins);
+        }
+        return TotalCoins;
+    }
 }
