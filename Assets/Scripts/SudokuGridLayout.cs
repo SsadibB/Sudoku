@@ -184,7 +184,7 @@ public class SudokuGridLayout : MonoBehaviour
                 }
                 else
                 {
-                    Cells[r, c].ClearCell();
+                    Cells[r, c].ResetForNewPuzzle();
                 }
             }
         }

@@ -40,6 +40,17 @@ public class LevelManager : MonoBehaviour
         return Mathf.Clamp(PlayerPrefs.GetInt(CompletedKey(difficulty), 0), 0, MaxLevel);
     }
 
+    // The highest level number reached across ALL difficulties — used for
+    // the Profile panel's "Highest level beaten" stat (e.g. reaching
+    // Level 40 on Easy and Level 12 on Hard shows 40, not a sum).
+    public int GetHighestLevelBeaten()
+    {
+        int easy = GetHighestCompleted(UIManager.Difficulty.Easy);
+        int medium = GetHighestCompleted(UIManager.Difficulty.Medium);
+        int hard = GetHighestCompleted(UIManager.Difficulty.Hard);
+        return Mathf.Max(easy, Mathf.Max(medium, hard));
+    }
+
     // The level a "Continue" button should open: the first level not yet
     // completed (clamped so it never exceeds MaxLevel).
     public int GetContinueLevel(UIManager.Difficulty difficulty)

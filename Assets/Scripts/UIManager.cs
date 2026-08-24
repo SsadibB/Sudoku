@@ -16,10 +16,18 @@ public class UIManager : MonoBehaviour
     [SerializeField] private RectTransform playButtonText;
     [SerializeField] private Button settingsButton;
     [SerializeField] private Button aboutButton;
+    [Tooltip("Same GameObject wired into ProfileManager's own 'Profile Icon Button' field — this reference only controls when it's shown; ProfileManager still owns the click behavior.")]
+    [SerializeField] private Button profileIconButton;
 
     [Header("Difficulty Panel")]
     [SerializeField] private GameObject difficultyPanel;
     [SerializeField] private Button backButton;
+
+    [Header("Difficulty Panel - Mode Selection")]
+    [Tooltip("SinglePlayer is the only playable mode right now. Shown together with the difficulty posters, not gating them.")]
+    [SerializeField] private Button singlePlayerButton;
+    [Tooltip("Not implemented yet. Kept non-interactable so it shows its Disabled Color state in the Inspector.")]
+    [SerializeField] private Button multiPlayerButton;
 
     [Header("Difficulty Posters")]
     [SerializeField] private Button easyPoster;
@@ -149,6 +157,11 @@ public class UIManager : MonoBehaviour
             settingsPanel.SetActive(false);
         }
 
+        // MultiPlayer isn't implemented yet - keep it non-interactable so it
+        // renders with its Disabled Color (set on the Button component in
+        // the Inspector) instead of looking clickable.
+        if (multiPlayerButton != null) multiPlayerButton.interactable = false;
+
         SetupLanguageDropdown();
         SyncLanguageLabel();
         SyncToggleVisualsFromSoundManager();
@@ -158,7 +171,7 @@ public class UIManager : MonoBehaviour
         RefreshProfileDisplay();
 
         if (CoinManager.Instance != null) CoinManager.Instance.OnCoinsChanged += RefreshCoinsDisplay;
-        if (ProfileLevelManager.Instance != null) ProfileLevelManager.Instance.OnXPChanged += HandleProfileXPChanged;
+        if (ProfileManager.Instance != null) ProfileManager.Instance.OnXPChanged += HandleProfileXPChanged;
 
         SoundManager.Instance?.PlayMusic("MenuMusic");
 
@@ -177,6 +190,7 @@ public class UIManager : MonoBehaviour
             if (settingsButton != null) settingsButton.gameObject.SetActive(false);
             if (aboutButton != null) aboutButton.gameObject.SetActive(false);
             if (playButton != null) playButton.gameObject.SetActive(false);
+            if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
 
             ShowDifficultyPanel();
         }
@@ -190,6 +204,8 @@ public class UIManager : MonoBehaviour
     {
         if (playButton != null) playButton.onClick.AddListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.AddListener(OnBackClicked);
+
+        if (singlePlayerButton != null) singlePlayerButton.onClick.AddListener(OnSinglePlayerClicked);
 
         if (easyPoster != null) easyPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Easy));
         if (mediumPoster != null) mediumPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Medium));
@@ -214,6 +230,7 @@ public class UIManager : MonoBehaviour
 
         if (playButton != null) playButton.onClick.RemoveListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.RemoveListener(OnBackClicked);
+        if (singlePlayerButton != null) singlePlayerButton.onClick.RemoveListener(OnSinglePlayerClicked);
 
         if (settingsButton != null) settingsButton.onClick.RemoveListener(OnSettingsClicked);
         if (closeSettingsButton != null) closeSettingsButton.onClick.RemoveListener(OnCloseSettingsClicked);
@@ -228,7 +245,7 @@ public class UIManager : MonoBehaviour
 
         // ---- NEW: Currency / Profile Display ----
         if (CoinManager.Instance != null) CoinManager.Instance.OnCoinsChanged -= RefreshCoinsDisplay;
-        if (ProfileLevelManager.Instance != null) ProfileLevelManager.Instance.OnXPChanged -= HandleProfileXPChanged;
+        if (ProfileManager.Instance != null) ProfileManager.Instance.OnXPChanged -= HandleProfileXPChanged;
     }
 
     // ---------------- Play Button Pulse ----------------
@@ -263,6 +280,7 @@ public class UIManager : MonoBehaviour
         if (settingsButton != null) settingsButton.gameObject.SetActive(false);
         if (aboutButton != null) aboutButton.gameObject.SetActive(false);
         if (playButton != null) playButton.gameObject.SetActive(false);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
 
         ShowDifficultyPanel();
     }
@@ -275,6 +293,7 @@ public class UIManager : MonoBehaviour
             if (playButton != null) playButton.gameObject.SetActive(true);
             if (settingsButton != null) settingsButton.gameObject.SetActive(true);
             if (aboutButton != null) aboutButton.gameObject.SetActive(true);
+            if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
 
             StartPlayButtonPulse();
         });
@@ -319,6 +338,17 @@ public class UIManager : MonoBehaviour
                 onComplete?.Invoke();
             })
             .SetLink(difficultyPanel);
+    }
+
+    // ---------------- Difficulty Panel - Mode Selection ----------------
+
+    // SinglePlayer is the only playable mode right now, shown together with
+    // the difficulty posters rather than gating them. Tapping it is just
+    // confirmation feedback - MultiPlayer has no listener since its button
+    // stays non-interactable.
+    private void OnSinglePlayerClicked()
+    {
+        PlayButtonSfx();
     }
 
     // Shared click SFX played by every button on this screen.
@@ -492,12 +522,12 @@ public class UIManager : MonoBehaviour
 
     private void RefreshProfileDisplay()
     {
-        if (ProfileLevelManager.Instance == null) return;
+        if (ProfileManager.Instance == null) return;
 
         HandleProfileXPChanged(
-            ProfileLevelManager.Instance.CurrentXP,
-            ProfileLevelManager.Instance.XPRequiredForCurrentLevel,
-            ProfileLevelManager.Instance.ProfileLevel);
+            ProfileManager.Instance.CurrentXP,
+            ProfileManager.Instance.XPRequiredForCurrentLevel,
+            ProfileManager.Instance.ProfileLevel);
     }
 
     private void HandleProfileXPChanged(int currentXP, int xpRequired, int level)

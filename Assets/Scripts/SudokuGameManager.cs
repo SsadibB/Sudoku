@@ -19,10 +19,38 @@ public class SudokuGameManager : MonoBehaviour
     [Header("Output Panel (Game Over / Victory)")]
     [SerializeField] private GameObject outputPanel;
     [SerializeField] private CanvasGroup outputPanelCanvasGroup;
-    [SerializeField] private GameObject gameOverText;
-    [SerializeField] private GameObject victoryText;
-    [SerializeField] private Button outputRestartButton;
     [SerializeField] private float outputPanelAnimDuration = 0.4f;
+
+    [Header("Output Panel - Banner (BgBanner > VictoryBanner / GameOverBanner)")]
+    [SerializeField] private GameObject victoryBanner;
+    [SerializeField] private GameObject gameOverBanner;
+
+    [Header("Output Panel - Avatar (single Image; sprite swapped per outcome)")]
+    [SerializeField] private Image avatarImage;
+    [SerializeField] private Sprite[] victoryAvatarSprites;
+    [SerializeField] private Sprite[] gameOverAvatarSprites;
+
+    [Header("Output Panel - Texts")]
+    [SerializeField] private TMP_Text outputLevelText;
+    [SerializeField] private TMP_Text outputStatusText;
+    [SerializeField] private string victoryStatusLabel = "Complete";
+    [SerializeField] private string gameOverStatusLabel = "Failed";
+
+    [Header("Output Panel - Score / Time")]
+    [SerializeField] private TMP_Text outputScoreText;
+    [SerializeField] private TMP_Text outputTimeText;
+
+    [Header("Output Panel - Stars (victory only; earned count based on hearts remaining)")]
+    [SerializeField] private GameObject starsContainer;
+    [Tooltip("3 star GameObjects, in order. Earned stars are left active; the rest are deactivated.")]
+    [SerializeField] private GameObject[] starObjects;
+
+    [Header("Output Panel - Buttons")]
+    [Tooltip("Victory only - loads the next level. Hidden on Game Over and when already on the last level.")]
+    [SerializeField] private Button outputNextButton;
+    [SerializeField] private Button outputRestartButton;
+    [Tooltip("Returns to the Difficulty Selection Panel (see PromptDifficultySelection()).")]
+    [SerializeField] private Button outputBackButton;
 
     [Header("In-Game Header Buttons")]
     [SerializeField] private Button backButton;
@@ -66,13 +94,18 @@ public class SudokuGameManager : MonoBehaviour
     [Tooltip("Optional in-game header label, e.g. shows 'Level 35'.")]
     [SerializeField] private TMP_Text levelHeaderText;
 
-    // ---- NEW: Coin Rewards ----
-    [Header("Coin Rewards")]
-    [SerializeField] private int coinsPerCorrectNumber = 5;
-    [SerializeField] private int coinsPerRowComplete = 10;
-    [SerializeField] private int coinsPerColumnComplete = 10;
-    [SerializeField] private int coinsPerBoxComplete = 20;
-    [SerializeField] private int coinsPerBoardComplete = 200;
+    // ---- NEW: Live HUD Score & Timer (updates while playing, not just on the Output Panel) ----
+    [Header("In-Game HUD - Live Score & Timer")]
+    [SerializeField] private TMP_Text hudScoreText;
+    [SerializeField] private TMP_Text hudTimeText;
+
+    // ---- NEW: Score (shown on the Output Panel and live HUD) ----
+    [Header("Score Rewards")]
+    [SerializeField] private int scorePerCorrectNumber = 5;
+    [SerializeField] private int scorePerRowComplete = 10;
+    [SerializeField] private int scorePerColumnComplete = 10;
+    [SerializeField] private int scorePerBoxComplete = 20;
+    [SerializeField] private int scorePerBoardComplete = 200;
 
     // ---- NEW: Profile XP Rewards ----
     [Header("Profile XP Rewards (granted once, on board complete)")]
@@ -94,6 +127,11 @@ public class SudokuGameManager : MonoBehaviour
 
     private Sequence outputPanelSequence;
 
+    // ---- NEW: Score & Timer, tracked per level attempt ----
+    private int sessionScore;
+    private float levelStartTime;
+    private float levelElapsedSeconds;
+
     // Each keypad button's original tint, so Note Mode's color swap can be
     // reverted cleanly when it's turned off.
     private Color[] numberButtonDefaultColors;
@@ -102,12 +140,12 @@ public class SudokuGameManager : MonoBehaviour
     // placements filled on the board — used to gray out that keypad button.
     private bool[] numberCompleted;
 
-    // Row/Column/3x3-Box completion coins fire once each, per game — these
+    // Row/Column/3x3-Box completion score fires once each, per game — these
     // track which sections have already paid out so re-checking an already-
     // complete section (e.g. after a later move elsewhere) doesn't double-pay.
-    private bool[] rowCoinAwarded;
-    private bool[] colCoinAwarded;
-    private bool[] boxCoinAwarded;
+    private bool[] rowScoreAwarded;
+    private bool[] colScoreAwarded;
+    private bool[] boxScoreAwarded;
 
     private struct CellMove
     {
@@ -168,6 +206,9 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (!isGameActive) return;
 
+        if (hudTimeText != null)
+            hudTimeText.text = $"Time:{FormatElapsedTime(Time.time - levelStartTime)}";
+
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null) return; // no keyboard device connected (e.g. mobile)
 
@@ -226,7 +267,9 @@ public class SudokuGameManager : MonoBehaviour
         if (outputPanel != null)
             outputPanel.SetActive(false);
 
+        if (outputNextButton != null) outputNextButton.onClick.AddListener(OnOutputNextClicked);
         if (outputRestartButton != null) outputRestartButton.onClick.AddListener(OnOutputRestartClicked);
+        if (outputBackButton != null) outputBackButton.onClick.AddListener(OnOutputBackClicked);
 
         // Heart Manager Event
         if (heartManager != null)
@@ -255,7 +298,9 @@ public class SudokuGameManager : MonoBehaviour
         if (heartManager != null)
             heartManager.OnGameOver -= HandleGameOver;
 
+        if (outputNextButton != null) outputNextButton.onClick.RemoveListener(OnOutputNextClicked);
         if (outputRestartButton != null) outputRestartButton.onClick.RemoveListener(OnOutputRestartClicked);
+        if (outputBackButton != null) outputBackButton.onClick.RemoveListener(OnOutputBackClicked);
         if (restartConfirmYesButton != null) restartConfirmYesButton.onClick.RemoveListener(OnRestartConfirmYesClicked);
         if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.RemoveListener(OnRestartConfirmNoClicked);
     }
@@ -274,9 +319,16 @@ public class SudokuGameManager : MonoBehaviour
         currentDifficulty = difficulty;
         currentLevel = Mathf.Clamp(level, 1, LevelManager.MaxLevel);
         undoStack.Clear();
-        ResetCoinAwardTracking();
+        ResetScoreAwardTracking();
 
-        (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty);
+        sessionScore = 0;
+        levelStartTime = Time.time;
+        levelElapsedSeconds = 0f;
+
+        if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
+        if (hudTimeText != null) hudTimeText.text = $"Time:{FormatElapsedTime(0f)}";
+
+        (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty, currentLevel);
 
         if (levelHeaderText != null) levelHeaderText.text = $"Level {currentLevel}";
 
@@ -312,11 +364,11 @@ public class SudokuGameManager : MonoBehaviour
         StartRandomSfxLoop();
     }
 
-    private void ResetCoinAwardTracking()
+    private void ResetScoreAwardTracking()
     {
-        rowCoinAwarded = new bool[9];
-        colCoinAwarded = new bool[9];
-        boxCoinAwarded = new bool[9];
+        rowScoreAwarded = new bool[9];
+        colScoreAwarded = new bool[9];
+        boxScoreAwarded = new bool[9];
     }
 
     private void StartRandomSfxLoop()
@@ -375,9 +427,10 @@ public class SudokuGameManager : MonoBehaviour
             selected.LockAsCorrect(number);
             selected.GlowNumber();
 
-            // ---- NEW: Coin Rewards ----
-            CoinManager.Instance?.AddCoins(coinsPerCorrectNumber);
+            // ---- NEW: Score Rewards ----
+            sessionScore += scorePerCorrectNumber;
             CheckSectionCompletion(row, col);
+            UpdateScoreHud();
 
             UpdateCompletedNumbers();
             CheckWinCondition();
@@ -408,31 +461,31 @@ public class SudokuGameManager : MonoBehaviour
         }
     }
 
-    // ---- NEW: Row / Column / 3x3 Box completion coins ----
+    // ---- NEW: Row / Column / 3x3 Box completion score ----
     // Called right after a correct placement (and after a hint fills a
-    // cell). Awards each section's coin bonus exactly once, the moment it
+    // cell). Awards each section's score bonus exactly once, the moment it
     // becomes fully correct.
     private void CheckSectionCompletion(int row, int col)
     {
-        if (gridLayout == null || rowCoinAwarded == null) return;
+        if (gridLayout == null || rowScoreAwarded == null) return;
 
-        if (!rowCoinAwarded[row] && IsRowComplete(row))
+        if (!rowScoreAwarded[row] && IsRowComplete(row))
         {
-            rowCoinAwarded[row] = true;
-            CoinManager.Instance?.AddCoins(coinsPerRowComplete);
+            rowScoreAwarded[row] = true;
+            sessionScore += scorePerRowComplete;
         }
 
-        if (!colCoinAwarded[col] && IsColumnComplete(col))
+        if (!colScoreAwarded[col] && IsColumnComplete(col))
         {
-            colCoinAwarded[col] = true;
-            CoinManager.Instance?.AddCoins(coinsPerColumnComplete);
+            colScoreAwarded[col] = true;
+            sessionScore += scorePerColumnComplete;
         }
 
         int boxIndex = (row / 3) * 3 + (col / 3);
-        if (!boxCoinAwarded[boxIndex] && IsBoxComplete(boxIndex))
+        if (!boxScoreAwarded[boxIndex] && IsBoxComplete(boxIndex))
         {
-            boxCoinAwarded[boxIndex] = true;
-            CoinManager.Instance?.AddCoins(coinsPerBoxComplete);
+            boxScoreAwarded[boxIndex] = true;
+            sessionScore += scorePerBoxComplete;
         }
     }
 
@@ -619,10 +672,11 @@ public class SudokuGameManager : MonoBehaviour
         int correctVal = solutionGrid[selected.Row, selected.Col];
         selected.SetFixedNumber(correctVal);
 
-        // A hint doesn't pay the "correct number" coin bonus (the player
+        // A hint doesn't pay the "correct number" score bonus (the player
         // didn't solve it themselves), but it can still complete a row/
         // column/box, so those bonuses still fire normally.
         CheckSectionCompletion(selected.Row, selected.Col);
+        UpdateScoreHud();
 
         UpdateCompletedNumbers();
         CheckWinCondition();
@@ -646,11 +700,14 @@ public class SudokuGameManager : MonoBehaviour
 
         // Victory!
         isGameActive = false;
+        levelElapsedSeconds = Time.time - levelStartTime;
 
-        // ---- NEW: Board-complete coins, Profile XP, Level unlock ----
-        CoinManager.Instance?.AddCoins(coinsPerBoardComplete);
-        ProfileLevelManager.Instance?.AddXP(GetProfileXPForDifficulty(currentDifficulty));
+        // ---- NEW: Board-complete score, Profile XP, Level unlock ----
+        sessionScore += scorePerBoardComplete;
+        UpdateScoreHud();
+        ProfileManager.Instance?.AddXP(GetProfileXPForDifficulty(currentDifficulty));
         LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
+        ProfileManager.Instance?.RecordVictory(currentDifficulty, sessionScore);
 
         ShowOutputPanel(isVictory: true);
     }
@@ -674,6 +731,8 @@ public class SudokuGameManager : MonoBehaviour
         if (!isGameActive) return;
 
         isGameActive = false;
+        levelElapsedSeconds = Time.time - levelStartTime;
+        ProfileManager.Instance?.RecordLoss();
         ShowOutputPanel(isVictory: false);
     }
 
@@ -685,8 +744,41 @@ public class SudokuGameManager : MonoBehaviour
         SoundManager.Instance?.StopMusic();
         SoundManager.Instance?.PlaySFX(isVictory ? "Victory" : "GameOver");
 
-        if (gameOverText != null) gameOverText.SetActive(!isVictory);
-        if (victoryText != null) victoryText.SetActive(isVictory);
+        // Banner
+        if (victoryBanner != null) victoryBanner.SetActive(isVictory);
+        if (gameOverBanner != null) gameOverBanner.SetActive(!isVictory);
+
+        // Avatar - one random sprite from the outcome-appropriate set
+        ShowRandomAvatar(isVictory);
+
+        // Texts
+        string statusSource = isVictory ? victoryStatusLabel : gameOverStatusLabel;
+        if (outputLevelText != null)
+        {
+            string levelSource = $"Level {currentLevel}";
+            outputLevelText.text = LocalizationManager.Instance != null
+                ? LocalizationManager.Instance.Translate(levelSource)
+                : levelSource;
+        }
+        if (outputStatusText != null)
+        {
+            outputStatusText.text = LocalizationManager.Instance != null
+                ? LocalizationManager.Instance.Translate(statusSource)
+                : statusSource;
+        }
+
+        // Score / Time
+        if (outputScoreText != null) outputScoreText.text = $"SCORE:{sessionScore}";
+        if (outputTimeText != null) outputTimeText.text = $"TIME: {FormatElapsedTime(levelElapsedSeconds)}";
+
+        // Stars - victory only, earned count based on hearts remaining
+        if (starsContainer != null) starsContainer.SetActive(isVictory);
+        if (isVictory) UpdateStars();
+
+        // Buttons - Next only makes sense after a Victory, and only if
+        // there's a next level to go to.
+        bool hasNextLevel = currentLevel < LevelManager.MaxLevel;
+        if (outputNextButton != null) outputNextButton.gameObject.SetActive(isVictory && hasNextLevel);
 
         outputPanelSequence?.Kill();
 
@@ -721,11 +813,81 @@ public class SudokuGameManager : MonoBehaviour
         }
     }
 
+    // Loads the next level in sequence (Victory only - hidden otherwise,
+    // see ShowOutputPanel). Completing Level N always leads to Level N+1.
+    private void OnOutputNextClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        HideOutputPanel();
+        StartNewGame(currentDifficulty, currentLevel + 1);
+    }
+
+    // Restarts the level currently shown on the Output Panel.
     private void OnOutputRestartClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
         HideOutputPanel();
+        StartNewGame(currentDifficulty, currentLevel);
+    }
+
+    // Returns to the Difficulty Selection Panel - reuses the same routing
+    // as the header Restart button: an in-scene panel if one is assigned,
+    // otherwise a flagged reload of MainMenu straight into its panel.
+    private void OnOutputBackClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        HideOutputPanel();
         PromptDifficultySelection();
+    }
+
+    // Picks one sprite at random from whichever outcome's set applies and
+    // assigns it to the single avatar Image.
+    private void ShowRandomAvatar(bool isVictory)
+    {
+        if (avatarImage == null) return;
+
+        Sprite[] sprites = isVictory ? victoryAvatarSprites : gameOverAvatarSprites;
+        if (sprites == null || sprites.Length == 0) return;
+
+        int chosen = UnityEngine.Random.Range(0, sprites.Length);
+        if (sprites[chosen] != null) avatarImage.sprite = sprites[chosen];
+    }
+
+    // Star rating is based on hearts remaining at the moment of victory:
+    // full 3 hearts (6 half-hearts) -> 3 stars, down to 1 star minimum on
+    // any win. Earned stars stay active; the rest are deactivated.
+    private void UpdateStars()
+    {
+        if (starObjects == null || starObjects.Length == 0) return;
+
+        int halfHearts = heartManager != null ? heartManager.CurrentHalfHearts : HeartManager.MaxHalfHearts;
+        int earned;
+        if (halfHearts >= 6) earned = 3;
+        else if (halfHearts >= 4) earned = 2;
+        else earned = 1;
+
+        for (int i = 0; i < starObjects.Length; i++)
+        {
+            if (starObjects[i] != null) starObjects[i].SetActive(i < earned);
+        }
+    }
+
+    private string FormatElapsedTime(float seconds)
+    {
+        int totalSeconds = Mathf.Max(0, Mathf.RoundToInt(seconds));
+        int hours = totalSeconds / 3600;
+        int minutes = (totalSeconds % 3600) / 60;
+        int secs = totalSeconds % 60;
+
+        return hours > 0
+            ? $"{hours:00}:{minutes:00}:{secs:00}"
+            : $"{minutes:00}:{secs:00}";
+    }
+
+    // Call any time sessionScore changes, to keep the live HUD in sync.
+    private void UpdateScoreHud()
+    {
+        if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
     }
 
     private void OnRestartHeaderClicked()
@@ -802,6 +964,6 @@ public class SudokuGameManager : MonoBehaviour
     private void OnBackClicked()
     {
         StopRandomSfxLoop();
-        SceneManager.LoadScene("MainMenu");
+        PromptDifficultySelection();
     }
 }

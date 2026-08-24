@@ -7,12 +7,17 @@ public class SudokuGenerator
 {
     public const int GridSize = 9;
 
-    private static readonly System.Random rand = new System.Random();
-
-    public static (int[,] puzzle, int[,] solution) GeneratePuzzle(UIManager.Difficulty difficulty)
+    // No more shared unseeded Random - each GeneratePuzzle call builds its
+    // own Random seeded from (difficulty, level), so the exact same level
+    // always produces the exact same puzzle (needed for Restart to give you
+    // back the identical board instead of a fresh random one).
+    public static (int[,] puzzle, int[,] solution) GeneratePuzzle(UIManager.Difficulty difficulty, int level)
     {
+        int seed = ((int)difficulty * 100000) + level;
+        System.Random rand = new System.Random(seed);
+
         int[,] solution = new int[GridSize, GridSize];
-        FillGrid(solution);
+        FillGrid(solution, rand);
 
         int[,] puzzle = (int[,])solution.Clone();
 
@@ -33,12 +38,12 @@ public class SudokuGenerator
                 break;
         }
 
-        RemoveNumbers(puzzle, GridSize * GridSize - cluesToKeep);
+        RemoveNumbers(puzzle, GridSize * GridSize - cluesToKeep, rand);
 
         return (puzzle, solution);
     }
 
-    private static bool FillGrid(int[,] grid)
+    private static bool FillGrid(int[,] grid, System.Random rand)
     {
         for (int r = 0; r < GridSize; r++)
         {
@@ -46,13 +51,13 @@ public class SudokuGenerator
             {
                 if (grid[r, c] == 0)
                 {
-                    List<int> numbers = GetShuffledNumbers();
+                    List<int> numbers = GetShuffledNumbers(rand);
                     foreach (int num in numbers)
                     {
                         if (IsValidPlacement(grid, r, c, num))
                         {
                             grid[r, c] = num;
-                            if (FillGrid(grid))
+                            if (FillGrid(grid, rand))
                                 return true;
                             grid[r, c] = 0;
                         }
@@ -64,7 +69,7 @@ public class SudokuGenerator
         return true;
     }
 
-    private static List<int> GetShuffledNumbers()
+    private static List<int> GetShuffledNumbers(System.Random rand)
     {
         List<int> numbers = new List<int> { 1, 2, 3, 4, 5, 6, 7, 8, 9 };
         for (int i = numbers.Count - 1; i > 0; i--)
@@ -99,7 +104,7 @@ public class SudokuGenerator
         return true;
     }
 
-    private static void RemoveNumbers(int[,] grid, int countToRemove)
+    private static void RemoveNumbers(int[,] grid, int countToRemove, System.Random rand)
     {
         List<int> indices = new List<int>();
         for (int i = 0; i < GridSize * GridSize; i++)

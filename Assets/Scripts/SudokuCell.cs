@@ -100,6 +100,24 @@ public class SudokuCell : MonoBehaviour
         numberText.color = fixedTextColor;
     }
 
+    // Full reset for loading a brand new puzzle. Unlike ClearCell() (which
+    // deliberately refuses to touch a permanently-locked cell during normal
+    // play, e.g. via the Erase button), this always resets back to empty/
+    // unfixed regardless of prior state. Needed because SudokuGridLayout
+    // builds its 81 SudokuCell objects once and reuses them for every
+    // level - after a full Victory every cell is IsFixed (locked correct),
+    // so without this, PopulateBoard's ClearCell() calls for the new
+    // puzzle's empty cells would silently no-op, leaving the finished
+    // board's numbers stuck in place.
+    public void ResetForNewPuzzle()
+    {
+        IsFixed = false;
+        IsCorrect = false;
+        ClearNotes();
+        numberText.text = "";
+        numberText.color = fixedTextColor;
+    }
+
     public int GetNumber()
     {
         return string.IsNullOrEmpty(numberText.text) ? 0 : int.Parse(numberText.text);
