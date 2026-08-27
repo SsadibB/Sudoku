@@ -1,0 +1,24 @@
+{
+    "name": "Sadib.AuthLogin",
+    "rootNamespace": "SadibTools.AuthLogin",
+    "references": [
+        "PlayFab",
+        "Unity.TextMeshPro",
+        "Unity.UGUI"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [
+        {
+            "name": "com.facebook.unity",
+            "expression": "",
+            "define": "SADIB_AUTH_FACEBOOK_SDK"
+        }
+    ],
+    "noEngineReferences": false
+}

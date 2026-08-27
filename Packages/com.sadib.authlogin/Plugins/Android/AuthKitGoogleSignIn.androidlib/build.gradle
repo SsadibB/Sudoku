@@ -1,0 +1,38 @@
+apply plugin: 'com.android.library'
+
+dependencies {
+    implementation fileTree(dir: 'libs', include: ['*.jar'])
+    implementation 'com.google.android.gms:play-services-auth:21.3.0'
+}
+
+android {
+    namespace "com.sadib.authlogin"
+    compileSdk getProperty("unity.compileSdkVersion") as int
+    buildToolsVersion getProperty("unity.buildToolsVersion")
+
+    compileOptions {
+        sourceCompatibility JavaVersion.valueOf(getProperty("unity.javaCompatabilityVersion"))
+        targetCompatibility JavaVersion.valueOf(getProperty("unity.javaCompatabilityVersion"))
+    }
+
+    defaultConfig {
+        minSdk getProperty("unity.minSdkVersion") as int
+        targetSdk getProperty("unity.targetSdkVersion") as int
+        ndk {
+            abiFilters.addAll(getProperty("unity.abiFilters").tokenize(','))
+            debugSymbolLevel getProperty("unity.debugSymbolLevel")
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['src']
+            res.srcDirs = ['res']
+        }
+    }
+
+    lint {
+        abortOnError false
+    }
+}

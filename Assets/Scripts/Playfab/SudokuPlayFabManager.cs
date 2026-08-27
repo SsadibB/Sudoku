@@ -73,6 +73,28 @@ public class SudokuPlayFabManager : MonoBehaviour
         DontDestroyOnLoad(gameObject);
     }
 
+    private void Start()
+    {
+        if (SadibTools.AuthLogin.AuthManager.Instance != null)
+        {
+            SadibTools.AuthLogin.AuthManager.Instance.OnLoginSuccess += OnSocialLoginSuccess;
+        }
+    }
+
+    private void OnDestroy()
+    {
+        if (SadibTools.AuthLogin.AuthManager.Instance != null)
+        {
+            SadibTools.AuthLogin.AuthManager.Instance.OnLoginSuccess -= OnSocialLoginSuccess;
+        }
+    }
+
+    private void OnSocialLoginSuccess(SadibTools.AuthLogin.AuthSession session)
+    {
+        IsLoggedIn = true;
+        FetchAndMergeCloudData();
+    }
+
     private void OnApplicationPause(bool pauseStatus)
     {
         if (pauseStatus && IsLoggedIn) PushToCloud();

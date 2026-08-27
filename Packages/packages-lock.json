@@ -1,5 +1,11 @@
 {
   "dependencies": {
+    "com.sadib.authlogin": {
+      "version": "file:com.sadib.authlogin",
+      "depth": 0,
+      "source": "embedded",
+      "dependencies": {}
+    },
     "com.unity.2d.animation": {
       "version": "14.0.4",
       "depth": 0,

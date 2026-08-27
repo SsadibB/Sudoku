@@ -1,0 +1,18 @@
+{
+  "name": "com.sadib.authlogin",
+  "version": "1.0.0",
+  "displayName": "Auth Login (PlayFab)",
+  "description": "Reusable PlayFab authentication package. Supports Google Account (LoginWithGoogleAccount) and Facebook / Instagram (LoginWithFacebook) via a single AuthManager API. Drop into any Unity Android project, assign your own AuthSettings, and call SignInWithGoogle(), SignInWithFacebook(), or SignInWithInstagram().",
+  "unity": "2021.3",
+  "keywords": ["playfab", "google", "facebook", "instagram", "authentication", "login", "oauth", "social"],
+  "author": {
+    "name": "Sadib"
+  },
+  "samples": [
+    {
+      "displayName": "Google Login Demo",
+      "description": "Minimal Sign in with Google UI wired to AuthManager.",
+      "path": "Samples~/GoogleLoginDemo"
+    }
+  ]
+}

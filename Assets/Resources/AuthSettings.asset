@@ -1,0 +1,18 @@
+%YAML 1.1
+%TAG !u! tag:unity3d.com,2011:
+--- !u!114 &11400000
+MonoBehaviour:
+  m_ObjectHideFlags: 0
+  m_CorrespondingSourceObject: {fileID: 0}
+  m_PrefabInstance: {fileID: 0}
+  m_PrefabAsset: {fileID: 0}
+  m_GameObject: {fileID: 0}
+  m_Enabled: 1
+  m_EditorHideFlags: 0
+  m_Script: {fileID: 11500000, guid: 4c8e1a2b3d5f47a89b0c1d2e3f4a5b6c, type: 3}
+  m_Name: AuthSettings
+  m_EditorClassIdentifier: Sadib.AuthLogin::SadibTools.AuthLogin.AuthSettings
+  playfabTitleId: 1CC0AC
+  googleWebClientId: 639476355618-47hul55gev7ummn5qhej7r1rs6flv5ge.apps.googleusercontent.com
+  facebookAppId: 1563688501428231
+  facebookClientToken: 868ecabf5c2fc9f3ff6fa8e717b563b0
