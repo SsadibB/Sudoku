@@ -3,6 +3,7 @@ using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.SceneManagement;
 
 #if UNITY_STANDALONE || UNITY_EDITOR
 using SFB; // Standalone File Browser — https://github.com/gkngkc/UnityStandaloneFileBrowser
@@ -130,6 +131,14 @@ public class ProfileManager : MonoBehaviour
     {
         if (Instance != null && Instance != this)
         {
+            // A fresh scene reload always creates a brand-new ProfileManager
+            // whose serialized fields correctly point at this load's actual
+            // panel/buttons/text — the persistent Instance's own fields still
+            // point at whatever got destroyed with the previous scene. Hand
+            // those fresh references over before this duplicate self-destructs,
+            // instead of throwing them away, so the persistent Instance keeps
+            // control of whichever Profile UI is actually alive right now.
+            Instance.RebindFrom(this);
             Destroy(gameObject);
             return;
         }
@@ -150,6 +159,12 @@ public class ProfileManager : MonoBehaviour
         if (uploadButton != null) uploadButton.onClick.AddListener(OnUploadClicked);
 
         if (profilePanel != null) profilePanel.SetActive(false);
+
+        // Belt-and-suspenders: catches any scene-loaded case not already
+        // covered by RebindFrom (e.g. additive loads that don't spawn a
+        // duplicate ProfileManager). RebindFrom is the one that matters for
+        // the normal reload-back-to-MainMenu flow.
+        SceneManager.sceneLoaded += OnSceneLoaded;
     }
 
     private void Start()
@@ -157,18 +172,99 @@ public class ProfileManager : MonoBehaviour
         LoadSavedProfilePicture();
     }
 
+    private void OnDestroy()
+    {
+        SceneManager.sceneLoaded -= OnSceneLoaded;
+    }
+
+    private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+    {
+        ForceClosePanel();
+    }
+
+    // Called on the persistent Instance by a freshly-loaded duplicate
+    // ProfileManager, right before that duplicate destroys itself. `fresh`
+    // is the duplicate — its serialized fields are the correct, currently-
+    // alive references for this scene load (ours are stale/destroyed).
+    private void RebindFrom(ProfileManager fresh)
+    {
+        // Old listeners are on now-destroyed buttons anyway, but detach
+        // cleanly in case anything here is still valid.
+        if (profileIconButton != null) profileIconButton.onClick.RemoveListener(OpenPanel);
+        if (closeButton != null) closeButton.onClick.RemoveListener(ClosePanel);
+        if (uploadButton != null) uploadButton.onClick.RemoveListener(OnUploadClicked);
+
+        profilePanel = fresh.profilePanel;
+        profileIconButton = fresh.profileIconButton;
+        closeButton = fresh.closeButton;
+        profileIconImage = fresh.profileIconImage;
+        profilePreviewImage = fresh.profilePreviewImage;
+        uploadButton = fresh.uploadButton;
+
+        easyHighScoreText = fresh.easyHighScoreText;
+        mediumHighScoreText = fresh.mediumHighScoreText;
+        hardHighScoreText = fresh.hardHighScoreText;
+        highestLevelText = fresh.highestLevelText;
+        winStreakText = fresh.winStreakText;
+        puzzlesSolvedText = fresh.puzzlesSolvedText;
+
+        if (profileIconButton != null) profileIconButton.onClick.AddListener(OpenPanel);
+        if (closeButton != null) closeButton.onClick.AddListener(ClosePanel);
+        if (uploadButton != null) uploadButton.onClick.AddListener(OnUploadClicked);
+
+        // Push the avatar that's already loaded onto the fresh Image refs,
+        // and the current stats onto the fresh Text refs — both existed
+        // before this reload and otherwise wouldn't show until they changed.
+        if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
+        RefreshStatsDisplay();
+
+        ForceClosePanel();
+        StartCoroutine(SuppressIconClickBriefly());
+    }
+
+    private IEnumerator SuppressIconClickBriefly()
+    {
+        if (profileIconButton == null) yield break;
+
+        profileIconButton.interactable = false;
+        // Real-time, not scaled — covers the stray click even if something
+        // has Time.timeScale paused right after the load.
+        yield return new WaitForSecondsRealtime(0.2f);
+        profileIconButton.interactable = true;
+    }
+
     // ==================== Panel open/close ====================
 
     private void OpenPanel()
     {
+        Debug.Log($"[ProfileManager] OpenPanel() called. Frame: {Time.frameCount}");
         if (profilePanel != null) profilePanel.SetActive(true);
         RefreshStatsDisplay();
     }
 
     private void ClosePanel()
     {
-        if (profilePanel != null) profilePanel.SetActive(false);
+        if (profilePanel != null)
+        {
+            profilePanel.SetActive(false);
+            return;
+        }
+
+        // If this fires after the very first scene load, the Profile Panel
+        // hierarchy isn't parented under this GameObject in the scene, so
+        // it didn't survive the last scene reload with ProfileManager (see
+        // the SETUP note at the top of this file) — this reference is now
+        // pointing at a destroyed object and can't be recovered at runtime.
+        Debug.LogWarning("[ProfileManager] ClosePanel() couldn't run — profilePanel " +
+            "reference is null, likely because the Profile Panel hierarchy isn't " +
+            "parented under the ProfileManager GameObject and didn't survive a scene reload.");
     }
+
+    // Public wrapper so other scripts (e.g. UIManager, on returning to
+    // MainMenu) can force the panel closed regardless of whatever state it
+    // was left in — this object is DontDestroyOnLoad, so its open/closed
+    // state otherwise survives scene reloads untouched.
+    public void ForceClosePanel() => ClosePanel();
 
     // ==================== Gallery upload ====================
 
@@ -316,8 +412,13 @@ public class ProfileManager : MonoBehaviour
 
     // ==================== Shared apply / persistence (avatar) ====================
 
+    // Cached so RebindFrom can re-apply the already-chosen avatar to fresh
+    // Image references after a scene reload, without re-reading disk/prefs.
+    private Sprite currentAvatarSprite;
+
     private void ApplySprite(Sprite sprite)
     {
+        currentAvatarSprite = sprite;
         if (profileIconImage != null) profileIconImage.sprite = sprite;
         if (profilePreviewImage != null) profilePreviewImage.sprite = sprite;
     }

@@ -1,6 +1,7 @@
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
+using UnityEngine.EventSystems;
 using UnityEngine.UI;
 using TMPro;
 using DG.Tweening;
@@ -140,10 +141,42 @@ public class UIManager : MonoBehaviour
             return;
         }
         Instance = this;
+
+        CleanUpDuplicateEventSystems();
+    }
+
+    // SoundManager / LocalizationManager / ProfileManager / LevelManager all
+    // dedupe themselves via DontDestroyOnLoad on first Awake, so they're
+    // fine. EventSystem has no such dedupe built in, and every reload of
+    // this scene (e.g. the flagged reload PromptDifficultySelection does
+    // from the in-level Back button) instantiates a brand new one, on top
+    // of whichever one already persisted from before. Multiple active
+    // EventSystems is a known Unity failure mode: UI clicks — including
+    // things like the Profile panel's Close button, which lives on a
+    // DontDestroyOnLoad object — become unreliable or stop registering.
+    // UIManager itself isn't persistent, so it re-runs this cleanup fresh
+    // on every MainMenu load and keeps only the oldest EventSystem alive.
+    private void CleanUpDuplicateEventSystems()
+    {
+        EventSystem[] systems = FindObjectsOfType<EventSystem>();
+        if (systems.Length <= 1) return;
+
+        EventSystem keep = systems[0];
+        for (int i = 1; i < systems.Length; i++)
+        {
+            if (systems[i] != keep) Destroy(systems[i].gameObject);
+        }
     }
 
     private void Start()
     {
+        // ProfileManager is DontDestroyOnLoad, so whatever state its panel
+        // was left in (open or closed) survives any reload of this scene —
+        // including the flagged reload below from the in-level Back button.
+        // Force it closed every time MainMenu boots so it can never come
+        // back up already open with no way to dismiss it.
+        ProfileManager.Instance?.ForceClosePanel();
+
         // Make sure panel starts hidden and scaled down (in case it was left active in editor)
         if (difficultyPanel != null)
         {

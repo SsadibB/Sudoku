@@ -948,8 +948,27 @@ public class SudokuGameManager : MonoBehaviour
             // instead of booting into the main menu buttons.
             PlayerPrefs.SetInt(UIManager.OpenDifficultyOnLoadKey, 1);
             PlayerPrefs.Save();
-            SceneManager.LoadScene("MainMenu");
+
+            // Don't load synchronously here. This method runs inside the
+            // Back button's own onClick callback, so a same-frame
+            // SceneManager.LoadScene swaps the active scene out from under
+            // the EventSystem while it's still mid-way through processing
+            // this exact click/tap. The tail end of that same input event
+            // then raycasts against whatever UI is now sitting at the same
+            // screen position in the freshly loaded MainMenu (often the
+            // profile icon in a top corner) and fires ITS onClick too —
+            // which is why the Profile panel could pop open on its own
+            // after tapping Back, without ever touching the icon. Waiting
+            // one frame lets this click finish fully against the old scene
+            // before MainMenu — and its UI — exists to receive anything.
+            StartCoroutine(LoadMainMenuNextFrame());
         }
+    }
+
+    private IEnumerator LoadMainMenuNextFrame()
+    {
+        yield return null;
+        SceneManager.LoadScene("MainMenu");
     }
 
     private void SelectDifficultyAndStart(UIManager.Difficulty difficulty)
