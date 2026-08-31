@@ -1,5 +1,13 @@
 ﻿<?xml version="1.0" encoding="utf-8"?>
 <projectSettings>
+  <projectSetting name="AndroidResolver.AndroidSdkManagerPath" value="C:/Program Files/Unity/Hub/Editor/6000.4.10f1/Editor/Data/PlaybackEngines/AndroidPlayer/SDK/cmdline-tools/16.0/bin/sdkmanager.bat" />
+  <projectSetting name="AndroidResolver.JavaToolsPath" value="C:/Program Files/Unity/Hub/Editor/6000.4.10f1/Editor/Data/PlaybackEngines/AndroidPlayer/OpenJDK/bin" />
+  <projectSetting name="Google.IOSResolver.VerboseLoggingEnabled" value="False" />
   <projectSetting name="Google.PackageManagerResolver.VerboseLoggingEnabled" value="False" />
+  <projectSetting name="Google.VersionHandler.EnableUpdateChecker" value="False" />
   <projectSetting name="Google.VersionHandler.VerboseLoggingEnabled" value="False" />
+  <projectSetting name="GooglePlayServices.EnableAutoResolution" value="True" />
+  <projectSetting name="GooglePlayServices.PatchAndroidManifest" value="False" />
+  <projectSetting name="GooglePlayServices.PromptBeforeAutoResolution" value="False" />
+  <projectSetting name="GooglePlayServices.UseGradleDaemon" value="False" />
 </projectSettings>
