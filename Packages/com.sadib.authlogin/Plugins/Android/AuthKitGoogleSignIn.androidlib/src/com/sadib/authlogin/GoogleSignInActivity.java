@@ -2,23 +2,22 @@ package com.sadib.authlogin;
 
 import android.app.Activity;
 import android.content.Intent;
-import android.content.IntentSender;
+import android.net.Uri;
 import android.os.Bundle;
 
-import com.google.android.gms.auth.api.identity.AuthorizationRequest;
-import com.google.android.gms.auth.api.identity.AuthorizationResult;
-import com.google.android.gms.auth.api.identity.Identity;
+import com.google.android.gms.auth.api.signin.GoogleSignIn;
+import com.google.android.gms.auth.api.signin.GoogleSignInAccount;
+import com.google.android.gms.auth.api.signin.GoogleSignInClient;
+import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 import com.google.android.gms.common.api.ApiException;
 import com.google.android.gms.common.api.CommonStatusCodes;
-import com.google.android.gms.common.api.Scope;
-
-import java.util.Arrays;
+import com.google.android.gms.tasks.Task;
 
 public final class GoogleSignInActivity extends Activity {
     public static final String EXTRA_WEB_CLIENT_ID = "webClientId";
     public static final String EXTRA_SILENT = "silent";
 
-    private static final int REQUEST_AUTHORIZE = 9101;
+    private static final int REQUEST_SIGN_IN = 9101;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -32,48 +31,30 @@ public final class GoogleSignInActivity extends Activity {
             return;
         }
 
-        AuthorizationRequest request = AuthorizationRequest.builder()
-                .setRequestedScopes(Arrays.asList(
-                        new Scope("email"),
-                        new Scope("profile"),
-                        new Scope("openid")))
-                .requestOfflineAccess(webClientId, !silent)
+        GoogleSignInOptions gso = new GoogleSignInOptions.Builder(GoogleSignInOptions.DEFAULT_SIGN_IN)
+                .requestServerAuthCode(webClientId)
+                .requestEmail()
+                .requestProfile()
                 .build();
 
-        Identity.getAuthorizationClient(this)
-                .authorize(request)
-                .addOnSuccessListener(result -> handleAuthorizationResult(result, silent))
-                .addOnFailureListener(e -> failAndFinish("native", safeMessage(e)));
-    }
+        GoogleSignInClient client = GoogleSignIn.getClient(this, gso);
 
-    private void handleAuthorizationResult(AuthorizationResult result, boolean silent) {
-        if (result.hasResolution()) {
-            if (silent) {
-                failAndFinish("cancelled", "Silent Google sign-in requires prior consent.");
-                return;
-            }
-
-            try {
-                startIntentSenderForResult(
-                        result.getPendingIntent().getIntentSender(),
-                        REQUEST_AUTHORIZE,
-                        null,
-                        0,
-                        0,
-                        0);
-            } catch (IntentSender.SendIntentException e) {
-                failAndFinish("native", safeMessage(e));
-            }
-            return;
+        if (silent) {
+            client.silentSignIn()
+                    .addOnCompleteListener(this, this::handleSignInResult);
+        } else {
+            // Sign out first so the account picker shows cleanly
+            client.signOut().addOnCompleteListener(this, task -> {
+                Intent signInIntent = client.getSignInIntent();
+                startActivityForResult(signInIntent, REQUEST_SIGN_IN);
+            });
         }
-
-        succeedAndFinish(result.getServerAuthCode());
     }
 
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_AUTHORIZE) {
+        if (requestCode != REQUEST_SIGN_IN) {
             return;
         }
 
@@ -82,10 +63,31 @@ public final class GoogleSignInActivity extends Activity {
             return;
         }
 
+        Task<GoogleSignInAccount> task = GoogleSignIn.getSignedInAccountFromIntent(data);
+        handleSignInResult(task);
+    }
+
+    private void handleSignInResult(Task<GoogleSignInAccount> task) {
         try {
-            AuthorizationResult result = Identity.getAuthorizationClient(this)
-                    .getAuthorizationResultFromIntent(data);
-            succeedAndFinish(result.getServerAuthCode());
+            GoogleSignInAccount account = task.getResult(ApiException.class);
+            if (account == null) {
+                failAndFinish("native", "Google sign-in account is null.");
+                return;
+            }
+
+            String serverAuthCode = account.getServerAuthCode();
+            if (serverAuthCode == null || serverAuthCode.length() == 0) {
+                failAndFinish("native", "Google returned an empty server auth code.");
+                return;
+            }
+
+            String displayName = account.getDisplayName() != null ? account.getDisplayName() : "";
+            Uri photoUri = account.getPhotoUrl();
+            String photoUrl = photoUri != null ? photoUri.toString() : "";
+            String email = account.getEmail() != null ? account.getEmail() : "";
+
+            GoogleSignInBridge.deliverSuccess(serverAuthCode, displayName, photoUrl, email);
+            finish();
         } catch (ApiException e) {
             if (e.getStatusCode() == CommonStatusCodes.CANCELED || e.getStatusCode() == 12501) {
                 failAndFinish("cancelled", "User cancelled Google sign-in.");
@@ -95,16 +97,6 @@ public final class GoogleSignInActivity extends Activity {
         } catch (Exception e) {
             failAndFinish("native", safeMessage(e));
         }
-    }
-
-    private void succeedAndFinish(String serverAuthCode) {
-        if (serverAuthCode == null || serverAuthCode.length() == 0) {
-            failAndFinish("native", "Google returned an empty server auth code.");
-            return;
-        }
-
-        GoogleSignInBridge.deliverSuccess(serverAuthCode);
-        finish();
     }
 
     private void failAndFinish(String errorCode, String message) {

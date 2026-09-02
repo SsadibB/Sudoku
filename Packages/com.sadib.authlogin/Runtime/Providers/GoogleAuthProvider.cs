@@ -5,8 +5,8 @@ using PlayFab.ClientModels;
 namespace SadibTools.AuthLogin
 {
     /// <summary>
-    /// Google Account -> PlayFab via LoginWithGoogleAccount (server auth code from
-    /// the Google Identity Authorization API on Android).
+    /// Google Account -> PlayFab via LoginWithGoogleAccount.
+    /// Captures Google Account DisplayName and PhotoUrl directly from native Android sign-in.
     /// </summary>
     public class GoogleAuthProvider : IAuthProvider
     {
@@ -14,6 +14,8 @@ namespace SadibTools.AuthLogin
 
         public string ProviderId => Id;
         public bool IsSignedIn { get; private set; }
+        public string LastPhotoUrl { get; private set; }
+        public string LastDisplayName { get; private set; }
 
         private readonly AuthSettings _settings;
         private readonly bool _createPlayFabAccountIfMissing;
@@ -44,7 +46,12 @@ namespace SadibTools.AuthLogin
             _google.RequestServerAuthCode(
                 _settings.GoogleWebClientId,
                 silent,
-                authCode => LoginToPlayFab(authCode, onSuccess, onFailure),
+                nativeAccount =>
+                {
+                    LastPhotoUrl = nativeAccount?.PhotoUrl;
+                    LastDisplayName = nativeAccount?.DisplayName;
+                    LoginToPlayFab(nativeAccount?.ServerAuthCode, onSuccess, onFailure);
+                },
                 error =>
                 {
                     IsSignedIn = false;
@@ -57,6 +64,8 @@ namespace SadibTools.AuthLogin
             _google.SignOut();
             PlayFabClientAPI.ForgetAllCredentials();
             IsSignedIn = false;
+            LastPhotoUrl = null;
+            LastDisplayName = null;
         }
 
         private void LoginToPlayFab(string serverAuthCode, Action<LoginResult> onSuccess, Action<AuthError> onFailure)

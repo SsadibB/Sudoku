@@ -231,8 +231,12 @@ namespace SadibTools.AuthLogin
                 onSuccess: result =>
                 {
                     IsBusy = false;
-                    CurrentSession = AuthSession.FromLogin(provider.ProviderId, result);
-                    Debug.Log($"[AuthManager] Login OK via {provider.ProviderId}. PlayFabId={result.PlayFabId} NewAccount={result.NewlyCreated}");
+                    string fallbackPhoto = (_google != null && provider == _google) ? _google.LastPhotoUrl :
+                                           ((_facebook != null && provider == _facebook) ? _facebook.LastPhotoUrl :
+                                           ((_instagram != null && provider == _instagram) ? _instagram.LastPhotoUrl : null));
+                    string fallbackName = (_google != null && provider == _google) ? _google.LastDisplayName : null;
+                    CurrentSession = AuthSession.FromLogin(provider.ProviderId, result, fallbackPhoto, fallbackName);
+                    Debug.Log($"[AuthManager] Login OK via {provider.ProviderId}. PlayFabId={result.PlayFabId} AvatarUrl={CurrentSession.AvatarUrl} NewAccount={result.NewlyCreated}");
                     OnLoginSuccess?.Invoke(CurrentSession);
                 },
                 onFailure: error =>

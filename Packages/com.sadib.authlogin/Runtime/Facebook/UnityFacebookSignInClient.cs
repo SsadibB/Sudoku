@@ -9,6 +9,7 @@ namespace SadibTools.AuthLogin
 
     /// <summary>
     /// Facebook / Instagram login via the official Facebook SDK for Unity.
+    /// Captures access token and user ID to construct authenticated profile picture URL.
     /// </summary>
     internal sealed class UnityFacebookSignInClient : IFacebookSignInClient
     {
@@ -25,7 +26,7 @@ namespace SadibTools.AuthLogin
             string appId,
             string clientToken,
             string[] permissions,
-            Action<string> onSuccess,
+            Action<FacebookNativeAccount> onSuccess,
             Action<AuthError> onFailure)
         {
             if (string.IsNullOrEmpty(appId) || string.IsNullOrEmpty(clientToken))
@@ -107,7 +108,7 @@ namespace SadibTools.AuthLogin
 
         private void HandleLoginResult(
             ILoginResult result,
-            Action<string> onSuccess,
+            Action<FacebookNativeAccount> onSuccess,
             Action<AuthError> onFailure)
         {
             AuthMainThread.Post(() =>
@@ -137,7 +138,8 @@ namespace SadibTools.AuthLogin
                     return;
                 }
 
-                onSuccess?.Invoke(token.TokenString);
+                var account = new FacebookNativeAccount(token.TokenString, token.UserId);
+                onSuccess?.Invoke(account);
             });
         }
     }

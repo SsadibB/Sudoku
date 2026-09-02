@@ -268,6 +268,12 @@ namespace SadibTools.AuthLogin
             // Connection successful message displayed in status text
             SetStatus("<color=#4CAF50>Connection Successful!</color>");
 
+            // Update player name with Google/Facebook display name
+            if (!string.IsNullOrEmpty(session.DisplayName))
+            {
+                UpdatePlayerName(session.DisplayName);
+            }
+
             if (accountInfoText != null)
             {
                 string userDisplay = !string.IsNullOrEmpty(session.DisplayName)
@@ -311,6 +317,20 @@ namespace SadibTools.AuthLogin
             }
 
             RefreshUI();
+        }
+
+        private void UpdatePlayerName(string name)
+        {
+            if (string.IsNullOrEmpty(name)) return;
+
+            var allTMP = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include);
+            foreach (var t in allTMP)
+            {
+                if (t.transform.parent != null && t.transform.parent.gameObject.name.ToLowerInvariant().Contains("profilename"))
+                {
+                    t.text = name;
+                }
+            }
         }
 
         // ==================== UI State Refresh ====================

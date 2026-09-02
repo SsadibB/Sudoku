@@ -8,7 +8,7 @@ import com.google.android.gms.auth.api.signin.GoogleSignInOptions;
 
 public final class GoogleSignInBridge {
     public interface Listener {
-        void onSuccess(String serverAuthCode);
+        void onSuccess(String serverAuthCode, String displayName, String photoUrl, String email);
 
         void onError(String errorCode, String message);
     }
@@ -34,11 +34,11 @@ public final class GoogleSignInBridge {
         listener = null;
     }
 
-    static void deliverSuccess(String serverAuthCode) {
+    static void deliverSuccess(String serverAuthCode, String displayName, String photoUrl, String email) {
         Listener callback = listener;
         listener = null;
         if (callback != null) {
-            callback.onSuccess(serverAuthCode);
+            callback.onSuccess(serverAuthCode, displayName, photoUrl, email);
         }
     }
 

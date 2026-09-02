@@ -16,7 +16,7 @@ namespace SadibTools.AuthLogin
         public void RequestServerAuthCode(
             string webClientId,
             bool silent,
-            Action<string> onSuccess,
+            Action<GoogleNativeAccount> onSuccess,
             Action<AuthError> onFailure)
         {
             if (string.IsNullOrEmpty(webClientId))
@@ -69,12 +69,12 @@ namespace SadibTools.AuthLogin
         private sealed class ListenerProxy : AndroidJavaProxy
         {
             private readonly AndroidGoogleSignInClient _owner;
-            private readonly Action<string> _onSuccess;
+            private readonly Action<GoogleNativeAccount> _onSuccess;
             private readonly Action<AuthError> _onFailure;
 
             public ListenerProxy(
                 AndroidGoogleSignInClient owner,
-                Action<string> onSuccess,
+                Action<GoogleNativeAccount> onSuccess,
                 Action<AuthError> onFailure)
                 : base(BridgeClass + "$Listener")
             {
@@ -83,7 +83,7 @@ namespace SadibTools.AuthLogin
                 _onFailure = onFailure;
             }
 
-            public void onSuccess(string serverAuthCode)
+            public void onSuccess(string serverAuthCode, string displayName, string photoUrl, string email)
             {
                 AuthMainThread.Post(() =>
                 {
@@ -94,7 +94,8 @@ namespace SadibTools.AuthLogin
                         return;
                     }
 
-                    _onSuccess?.Invoke(serverAuthCode);
+                    var account = new GoogleNativeAccount(serverAuthCode, displayName, photoUrl, email);
+                    _onSuccess?.Invoke(account);
                 });
             }
 
