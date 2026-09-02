@@ -80,6 +80,7 @@ namespace SadibTools.AuthLogin
                 settings = AuthSettings.LoadFromResources();
 
             RebuildProvider();
+            AuthLoginUI.EnsureInstance();
         }
 
         /// <summary>Assign AuthSettings at runtime before the first sign-in (e.g. from a sample scene).</summary>

@@ -28,12 +28,31 @@ namespace SadibTools.AuthLogin.Editor
             if (report.summary.platform != BuildTarget.Android)
                 return;
 
+            EnsureAndroidSdkRootInEditorPrefs();
             WriteStrings(AuthSettings.LoadFromResources());
+        }
+
+        [InitializeOnLoadMethod]
+        private static void EnsureAndroidSdkRootInEditorPrefs()
+        {
+            try
+            {
+                if (string.IsNullOrEmpty(EditorPrefs.GetString("AndroidSdkRoot")))
+                {
+                    string sdkPath = UnityEditor.Android.AndroidExternalToolsSettings.sdkRootPath;
+                    if (!string.IsNullOrEmpty(sdkPath) && Directory.Exists(sdkPath))
+                    {
+                        EditorPrefs.SetString("AndroidSdkRoot", sdkPath);
+                    }
+                }
+            }
+            catch { }
         }
 
         [MenuItem("Auth Login/Write Facebook Android Strings")]
         private static void WriteFromMenu()
         {
+            EnsureAndroidSdkRootInEditorPrefs();
             WriteStrings(AuthSettings.LoadFromResources());
         }
 

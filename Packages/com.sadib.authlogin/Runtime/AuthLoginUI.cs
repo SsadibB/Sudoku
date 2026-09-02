@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using TMPro;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 
 namespace SadibTools.AuthLogin
@@ -8,28 +10,30 @@ namespace SadibTools.AuthLogin
     /// <summary>
     /// Drop-in UI component to connect Google, Facebook, and Instagram Login/Logout buttons
     /// and display real-time connection status, success messages, and account details.
-    /// Supports both TextMeshPro (TMP_Text) and Standard/Legacy UI Text.
+    /// Automatically discovers and wires UI elements in the scene hierarchy.
+    /// Dynamically switches button text between "Log in" and "Log out" and highlights active logos.
     /// </summary>
     [AddComponentMenu("Auth Login/Auth Login UI")]
     public class AuthLoginUI : MonoBehaviour
     {
-        [Header("Google Buttons")]
-        [Tooltip("Button or Container shown when NOT connected with Google.")]
-        [SerializeField] private GameObject googleLoginButton;
-        [Tooltip("Button or Container shown when connected with Google.")]
-        [SerializeField] private GameObject googleLogoutButton;
+        public static AuthLoginUI Instance { get; private set; }
 
-        [Header("Facebook Buttons")]
-        [Tooltip("Button or Container shown when NOT connected with Facebook.")]
-        [SerializeField] private GameObject facebookLoginButton;
-        [Tooltip("Button or Container shown when connected with Facebook.")]
-        [SerializeField] private GameObject facebookLogoutButton;
+        [System.Serializable]
+        public class ProviderSlot
+        {
+            public string providerId;
+            public GameObject button;
+            public GameObject logoutButton;
+            public Image logoImage;
+            public TMP_Text labelTMP;
+            public Text labelLegacy;
+            public List<Button> allButtons = new List<Button>();
+        }
 
-        [Header("Instagram Buttons")]
-        [Tooltip("Button or Container shown when NOT connected with Instagram.")]
-        [SerializeField] private GameObject instagramLoginButton;
-        [Tooltip("Button or Container shown when connected with Instagram.")]
-        [SerializeField] private GameObject instagramLogoutButton;
+        [Header("Providers UI")]
+        [SerializeField] private ProviderSlot google = new ProviderSlot { providerId = "google" };
+        [SerializeField] private ProviderSlot facebook = new ProviderSlot { providerId = "facebook" };
+        [SerializeField] private ProviderSlot instagram = new ProviderSlot { providerId = "instagram" };
 
         [Header("Status Display")]
         [Tooltip("TextMeshPro text for connection status messages (e.g. 'Connect_Text').")]
@@ -45,39 +49,94 @@ namespace SadibTools.AuthLogin
         [Tooltip("Spinner / loading game object shown while authentication is in progress.")]
         [SerializeField] private GameObject loadingIndicator;
 
-        [Header("Auto Discovery & Raycasting")]
-        [Tooltip("Automatically bind buttons and find 'Connect_Text' if unassigned.")]
+        [Header("Visual Feedback")]
+        [Tooltip("Color of logo when connected.")]
+        [SerializeField] private Color logoConnectedColor = new Color(1f, 1f, 1f, 1f);
+        [Tooltip("Color of logo when disconnected.")]
+        [SerializeField] private Color logoDisconnectedColor = new Color(0.6f, 0.6f, 0.6f, 0.75f);
+        [Tooltip("Text to display when not logged in.")]
+        [SerializeField] private string loginText = "Log in";
+        [Tooltip("Text to display when logged in.")]
+        [SerializeField] private string logoutText = "Log out";
+
+        [Header("Auto Discovery")]
+        [Tooltip("Automatically find buttons, labels, and 'Connect_Text' if unassigned.")]
         [SerializeField] private bool autoDiscoverElements = true;
+
+        [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.AfterSceneLoad)]
+        private static void AutoInitialize()
+        {
+            EnsureInstance();
+        }
+
+        public static AuthLoginUI EnsureInstance()
+        {
+            if (Instance != null) return Instance;
+
+            var existing = FindAnyObjectByType<AuthLoginUI>();
+            if (existing != null)
+            {
+                Instance = existing;
+                return existing;
+            }
+
+            var authMgr = AuthManager.EnsureInstance();
+            if (authMgr != null)
+            {
+                Instance = authMgr.gameObject.AddComponent<AuthLoginUI>();
+                return Instance;
+            }
+
+            var go = new GameObject("AuthLoginUI");
+            Instance = go.AddComponent<AuthLoginUI>();
+            DontDestroyOnLoad(go);
+            return Instance;
+        }
 
         private void Awake()
         {
-            if (autoDiscoverElements)
+            if (Instance == null)
             {
-                AutoDiscoverStatusText();
-                AutoDiscoverButtons();
+                Instance = this;
+            }
+            else if (Instance != this)
+            {
+                Destroy(this);
+                return;
             }
 
-            SetupButton(googleLoginButton, OnClickSignInGoogle);
-            SetupButton(googleLogoutButton, OnClickSignOutGoogle);
+            google.providerId = GoogleAuthProvider.Id;
+            facebook.providerId = FacebookAuthProvider.FacebookId;
+            instagram.providerId = FacebookAuthProvider.InstagramId;
 
-            SetupButton(facebookLoginButton, OnClickSignInFacebook);
-            SetupButton(facebookLogoutButton, OnClickSignOutFacebook);
+            SceneManager.sceneLoaded += OnSceneLoaded;
 
-            SetupButton(instagramLoginButton, OnClickSignInInstagram);
-            SetupButton(instagramLogoutButton, OnClickSignOutInstagram);
+            BindAndRefresh();
+        }
+
+        private void OnDestroy()
+        {
+            SceneManager.sceneLoaded -= OnSceneLoaded;
+            if (Instance == this) Instance = null;
+        }
+
+        private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
+        {
+            BindAndRefresh();
         }
 
         private void OnEnable()
         {
-            if (AuthManager.Instance != null)
+            var auth = AuthManager.EnsureInstance();
+            if (auth != null)
             {
-                AuthManager.Instance.OnLoginStarted += HandleLoginStarted;
-                AuthManager.Instance.OnLoginSuccess += HandleLoginSuccess;
-                AuthManager.Instance.OnLoginFailure += HandleLoginFailure;
-                AuthManager.Instance.OnSignedOut += HandleSignedOut;
+                auth.OnLoginStarted += HandleLoginStarted;
+                auth.OnLoginSuccess += HandleLoginSuccess;
+                auth.OnLoginFailure += HandleLoginFailure;
+                auth.OnSignedOut += HandleSignedOut;
             }
 
-            RefreshUI();
+            BindAndRefresh();
         }
 
         private void OnDisable()
@@ -93,10 +152,64 @@ namespace SadibTools.AuthLogin
 
         private void Start()
         {
+            BindAndRefresh();
+        }
+
+        public void BindAndRefresh()
+        {
+            if (autoDiscoverElements)
+            {
+                AutoDiscoverStatusText();
+                AutoDiscoverProviderSlots();
+            }
+
+            BindSlot(google, OnClickGoogleSlot);
+            BindSlot(facebook, OnClickFacebookSlot);
+            BindSlot(instagram, OnClickInstagramSlot);
+
             RefreshUI();
         }
 
-        // ==================== Actions (Callable from UI Buttons) ====================
+        // ==================== Slot Actions (Toggles Login/Logout) ====================
+
+        public void OnClickGoogleSlot()
+        {
+            var auth = AuthManager.EnsureInstance();
+            if (auth.IsGoogleSignedIn)
+            {
+                OnClickSignOutGoogle();
+            }
+            else
+            {
+                OnClickSignInGoogle();
+            }
+        }
+
+        public void OnClickFacebookSlot()
+        {
+            var auth = AuthManager.EnsureInstance();
+            if (auth.IsFacebookSignedIn)
+            {
+                OnClickSignOutFacebook();
+            }
+            else
+            {
+                OnClickSignInFacebook();
+            }
+        }
+
+        public void OnClickInstagramSlot()
+        {
+            var auth = AuthManager.EnsureInstance();
+            if (auth.IsInstagramSignedIn)
+            {
+                OnClickSignOutInstagram();
+            }
+            else
+            {
+                OnClickSignInInstagram();
+            }
+        }
 
         public void OnClickSignInGoogle()
         {
@@ -151,15 +264,16 @@ namespace SadibTools.AuthLogin
         private void HandleLoginSuccess(AuthSession session)
         {
             SetLoading(false);
-            string providerName = GetProviderDisplayName(session.ProviderId);
-            string userDisplay = !string.IsNullOrEmpty(session.DisplayName)
-                ? session.DisplayName
-                : (!string.IsNullOrEmpty(session.Email) ? session.Email : session.PlayFabId);
-
-            SetStatus($"<color=#4CAF50>Connected ({providerName}): {userDisplay}</color>");
+            
+            // Connection successful message displayed in status text
+            SetStatus("<color=#4CAF50>Connection Successful!</color>");
 
             if (accountInfoText != null)
             {
+                string userDisplay = !string.IsNullOrEmpty(session.DisplayName)
+                    ? session.DisplayName
+                    : (!string.IsNullOrEmpty(session.Email) ? session.Email : session.PlayFabId);
+
                 accountInfoText.text = $"Logged in as: <b>{userDisplay}</b>\nPlayFab ID: <color=#888888>{session.PlayFabId}</color>";
                 accountInfoText.gameObject.SetActive(true);
             }
@@ -187,7 +301,7 @@ namespace SadibTools.AuthLogin
         private void HandleSignedOut(string providerId)
         {
             SetLoading(false);
-            string providerName = providerId == "all" ? "All providers" : GetProviderDisplayName(providerId);
+            string providerName = providerId == "all" ? "All accounts" : GetProviderDisplayName(providerId);
             SetStatus($"Signed out from {providerName}.");
 
             if (accountInfoText != null && (AuthManager.Instance == null || !AuthManager.Instance.IsSignedIn))
@@ -211,16 +325,10 @@ namespace SadibTools.AuthLogin
 
             SetLoading(isBusy);
 
-            // Google Buttons
-            SetPairState(googleLoginButton, googleLogoutButton, isGoogle);
+            UpdateSlotState(google, isGoogle);
+            UpdateSlotState(facebook, isFacebook);
+            UpdateSlotState(instagram, isInstagram);
 
-            // Facebook Buttons
-            SetPairState(facebookLoginButton, facebookLogoutButton, isFacebook);
-
-            // Instagram Buttons
-            SetPairState(instagramLoginButton, instagramLogoutButton, isInstagram);
-
-            // Account info if already logged in
             if (accountInfoText != null && auth != null && auth.IsSignedIn && auth.CurrentSession != null)
             {
                 var session = auth.CurrentSession;
@@ -233,10 +341,41 @@ namespace SadibTools.AuthLogin
             }
         }
 
-        private void SetPairState(GameObject loginObj, GameObject logoutObj, bool isSignedIn)
+        private void UpdateSlotState(ProviderSlot slot, bool isConnected)
         {
-            if (loginObj != null) loginObj.SetActive(!isSignedIn);
-            if (logoutObj != null) logoutObj.SetActive(isSignedIn);
+            if (slot == null) return;
+
+            // 1. Logo active brightness / color
+            if (slot.logoImage != null)
+            {
+                slot.logoImage.color = isConnected ? logoConnectedColor : logoDisconnectedColor;
+            }
+
+            // 2. Label text ("Log in" vs "Log out")
+            string displayText = isConnected ? logoutText : loginText;
+
+            if (slot.labelTMP != null)
+            {
+                slot.labelTMP.text = displayText;
+            }
+
+            if (slot.labelLegacy != null)
+            {
+                slot.labelLegacy.text = displayText;
+            }
+
+            // Also update any labels under buttons in slot
+            if (slot.allButtons != null)
+            {
+                foreach (var b in slot.allButtons)
+                {
+                    if (b == null) continue;
+                    var tmp = b.GetComponentInChildren<TMP_Text>(includeInactive: true);
+                    if (tmp != null) tmp.text = displayText;
+                    var txt = b.GetComponentInChildren<Text>(includeInactive: true);
+                    if (txt != null) txt.text = displayText;
+                }
+            }
         }
 
         public void SetStatus(string message)
@@ -286,24 +425,19 @@ namespace SadibTools.AuthLogin
                 loadingIndicator.SetActive(active);
         }
 
-        private void SetupButton(GameObject target, UnityEngine.Events.UnityAction action)
+        private void BindSlot(ProviderSlot slot, UnityEngine.Events.UnityAction toggleAction)
         {
-            if (target == null) return;
+            if (slot == null || slot.allButtons == null) return;
 
-            // Ensure Button is raycastable on mobile touchscreens
-            var btn = target.GetComponent<Button>();
-            if (btn != null)
+            foreach (var btn in slot.allButtons)
             {
+                if (btn == null) continue;
                 EnsureButtonRaycastable(btn);
-                btn.onClick.RemoveListener(action);
-                btn.onClick.AddListener(action);
+                btn.onClick.RemoveListener(toggleAction);
+                btn.onClick.AddListener(toggleAction);
             }
         }
 
-        /// <summary>
-        /// Ensures a UI button has a valid Graphic with raycastTarget=true
-        /// so touch clicks register reliably across its full rect.
-        /// </summary>
         private void EnsureButtonRaycastable(Button btn)
         {
             if (btn == null) return;
@@ -319,7 +453,6 @@ namespace SadibTools.AuthLogin
                 }
                 else
                 {
-                    // Add transparent Image so the entire RectTransform bounds are clickable
                     var img = btn.gameObject.AddComponent<Image>();
                     img.color = new Color(0, 0, 0, 0);
                     img.raycastTarget = true;
@@ -344,12 +477,11 @@ namespace SadibTools.AuthLogin
                 return;
             }
 
-            // Search for Connect_Text or StatusText in hierarchy
             var allTMP = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include);
             foreach (var t in allTMP)
             {
                 string n = t.gameObject.name.ToLowerInvariant();
-                if (n.Contains("connect_text") || n.Contains("connecttext") || n.Contains("statustext") || n.Contains("authstatus"))
+                if (n.Contains("connect_text") || n.Contains("connecttext") || n.Contains("statustext") || n.Contains("authstatus") || n.Contains("connect"))
                 {
                     statusTMPText = t;
                     statusTextObject = t.gameObject;
@@ -361,7 +493,7 @@ namespace SadibTools.AuthLogin
             foreach (var t in allLegacy)
             {
                 string n = t.gameObject.name.ToLowerInvariant();
-                if (n.Contains("connect_text") || n.Contains("connecttext") || n.Contains("statustext") || n.Contains("authstatus"))
+                if (n.Contains("connect_text") || n.Contains("connecttext") || n.Contains("statustext") || n.Contains("authstatus") || n.Contains("connect"))
                 {
                     statusLegacyText = t;
                     statusTextObject = t.gameObject;
@@ -370,24 +502,63 @@ namespace SadibTools.AuthLogin
             }
         }
 
-        private void AutoDiscoverButtons()
+        private void AutoDiscoverProviderSlots()
         {
-            var buttons = FindObjectsByType<Button>(FindObjectsInactive.Include);
-            foreach (var b in buttons)
+            google.allButtons.Clear();
+            facebook.allButtons.Clear();
+            instagram.allButtons.Clear();
+
+            var allButtons = FindObjectsByType<Button>(FindObjectsInactive.Include);
+            foreach (var b in allButtons)
             {
                 string n = b.gameObject.name.ToLowerInvariant();
-                if (googleLoginButton == null && (n == "google" || n == "goggle" || n.Contains("googlelogin") || n.Contains("googlesignin")))
-                    googleLoginButton = b.gameObject;
-                else if (googleLogoutButton == null && (n.Contains("googlelogout") || n.Contains("googlesignout")))
-                    googleLogoutButton = b.gameObject;
-                else if (facebookLoginButton == null && (n == "facebook" || n.Contains("facebooklogin") || n.Contains("facebooksignin")))
-                    facebookLoginButton = b.gameObject;
-                else if (facebookLogoutButton == null && (n.Contains("facebooklogout") || n.Contains("facebooksignout")))
-                    facebookLogoutButton = b.gameObject;
-                else if (instagramLoginButton == null && (n == "instagram" || n.Contains("instagramlogin") || n.Contains("instagramsignin")))
-                    instagramLoginButton = b.gameObject;
-                else if (instagramLogoutButton == null && (n.Contains("instagramlogout") || n.Contains("instagramsignout")))
-                    instagramLogoutButton = b.gameObject;
+                string parentName = b.transform.parent != null ? b.transform.parent.gameObject.name.ToLowerInvariant() : "";
+
+                if (n.Contains("google") || n.Contains("goggle") || parentName.Contains("google") || parentName.Contains("goggle"))
+                {
+                    RegisterButtonToSlot(google, b);
+                }
+                else if (n.Contains("facebook") || parentName.Contains("facebook"))
+                {
+                    RegisterButtonToSlot(facebook, b);
+                }
+                else if (n.Contains("instagram") || parentName.Contains("instagram"))
+                {
+                    RegisterButtonToSlot(instagram, b);
+                }
+            }
+        }
+
+        private void RegisterButtonToSlot(ProviderSlot slot, Button b)
+        {
+            if (!slot.allButtons.Contains(b))
+            {
+                slot.allButtons.Add(b);
+            }
+
+            if (slot.button == null)
+            {
+                slot.button = b.gameObject;
+            }
+
+            if (slot.logoImage == null)
+            {
+                // Try to find the logo image on this button or its parent
+                var img = b.GetComponent<Image>() ?? b.transform.parent?.GetComponent<Image>() ?? b.GetComponentInChildren<Image>(includeInactive: true);
+                if (img != null && img.sprite != null && img.sprite.name != "UISprite")
+                {
+                    slot.logoImage = img;
+                }
+            }
+
+            if (slot.labelTMP == null)
+            {
+                slot.labelTMP = b.GetComponentInChildren<TMP_Text>(includeInactive: true);
+            }
+
+            if (slot.labelLegacy == null)
+            {
+                slot.labelLegacy = b.GetComponentInChildren<Text>(includeInactive: true);
             }
         }
 
