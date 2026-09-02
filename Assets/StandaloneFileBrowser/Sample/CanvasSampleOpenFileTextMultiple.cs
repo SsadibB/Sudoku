@@ -53,9 +53,12 @@ public class CanvasSampleOpenFileTextMultiple : MonoBehaviour, IPointerDownHandl
     private IEnumerator OutputRoutine(string[] urlArr) {
         var outputText = "";
         for (int i = 0; i < urlArr.Length; i++) {
-            var loader = new WWW(urlArr[i]);
-            yield return loader;
-            outputText += loader.text;
+            using (var loader = UnityEngine.Networking.UnityWebRequest.Get(urlArr[i])) {
+                yield return loader.SendWebRequest();
+                if (loader.result == UnityEngine.Networking.UnityWebRequest.Result.Success) {
+                    outputText += loader.downloadHandler.text;
+                }
+            }
         }
         output.text = outputText;
     }

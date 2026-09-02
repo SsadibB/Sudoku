@@ -46,8 +46,11 @@ public class CanvasSampleOpenFileImage : MonoBehaviour, IPointerDownHandler {
 #endif
 
     private IEnumerator OutputRoutine(string url) {
-        var loader = new WWW(url);
-        yield return loader;
-        output.texture = loader.texture;
+        using (var loader = UnityEngine.Networking.UnityWebRequestTexture.GetTexture(url)) {
+            yield return loader.SendWebRequest();
+            if (loader.result == UnityEngine.Networking.UnityWebRequest.Result.Success) {
+                output.texture = UnityEngine.Networking.DownloadHandlerTexture.GetContent(loader);
+            }
+        }
     }
 }

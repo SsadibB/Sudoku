@@ -158,7 +158,7 @@ public class UIManager : MonoBehaviour
     // on every MainMenu load and keeps only the oldest EventSystem alive.
     private void CleanUpDuplicateEventSystems()
     {
-        EventSystem[] systems = FindObjectsOfType<EventSystem>();
+        EventSystem[] systems = FindObjectsByType<EventSystem>(FindObjectsInactive.Exclude);
         if (systems.Length <= 1) return;
 
         EventSystem keep = systems[0];

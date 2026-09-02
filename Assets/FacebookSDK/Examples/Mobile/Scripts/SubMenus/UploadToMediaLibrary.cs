@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Copyright (c) 2014-present, Facebook, Inc. All rights reserved.
  *
  * You are hereby granted a non-exclusive, worldwide, royalty-free license to use,
@@ -97,7 +97,11 @@ namespace Facebook.Unity.Example
             var request = UnityWebRequest.Get(path);
             request.SendWebRequest();
             while (!request.isDone) {
+#if UNITY_2020_2_OR_NEWER
+                if (request.result == UnityWebRequest.Result.ConnectionError || request.result == UnityWebRequest.Result.ProtocolError) {
+#else
                 if (request.isNetworkError || request.isHttpError) {
+#endif
                     break;
                 }
             }

@@ -4,7 +4,7 @@
     "references": [
         "PlayFab",
         "Unity.TextMeshPro",
-        "Unity.UGUI"
+        "UnityEngine.UI"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],

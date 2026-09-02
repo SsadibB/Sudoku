@@ -1,8 +1,8 @@
 apply plugin: 'com.android.library'
 
 dependencies {
-    implementation fileTree(dir: 'libs', include: ['*.jar'])
-    implementation 'com.google.android.gms:play-services-auth:21.3.0'
+    compileOnly fileTree(dir: 'libs', include: ['*.jar'])
+    compileOnly 'com.google.android.gms:play-services-auth:21.3.0'
 }
 
 android {

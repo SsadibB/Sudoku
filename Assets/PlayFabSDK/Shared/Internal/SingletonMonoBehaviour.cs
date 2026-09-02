@@ -21,7 +21,11 @@ namespace PlayFab.Internal
             if (_instance == null)
             {
                 //find existing instance
+#if UNITY_2023_1_OR_NEWER
+                _instance = FindAnyObjectByType<T>();
+#else
                 _instance = FindObjectOfType<T>();
+#endif
                 if (_instance == null)
                 {
                     //create new instance

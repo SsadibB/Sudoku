@@ -345,7 +345,7 @@ namespace SadibTools.AuthLogin
             }
 
             // Search for Connect_Text or StatusText in hierarchy
-            var allTMP = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var allTMP = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include);
             foreach (var t in allTMP)
             {
                 string n = t.gameObject.name.ToLowerInvariant();
@@ -357,7 +357,7 @@ namespace SadibTools.AuthLogin
                 }
             }
 
-            var allLegacy = FindObjectsByType<Text>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var allLegacy = FindObjectsByType<Text>(FindObjectsInactive.Include);
             foreach (var t in allLegacy)
             {
                 string n = t.gameObject.name.ToLowerInvariant();
@@ -372,7 +372,7 @@ namespace SadibTools.AuthLogin
 
         private void AutoDiscoverButtons()
         {
-            var buttons = FindObjectsByType<Button>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            var buttons = FindObjectsByType<Button>(FindObjectsInactive.Include);
             foreach (var b in buttons)
             {
                 string n = b.gameObject.name.ToLowerInvariant();

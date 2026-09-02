@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Copyright (c) 2014-present, Facebook, Inc. All rights reserved.
  *
  * You are hereby granted a non-exclusive, worldwide, royalty-free license to use,
@@ -30,7 +30,11 @@ public class UIInputHelper : MonoBehaviour
 
     private void Start()
     {
+#if UNITY_2023_1_OR_NEWER
+        EventSystem sceneEventSystem = FindAnyObjectByType<EventSystem>();
+#else
         EventSystem sceneEventSystem = FindObjectOfType<EventSystem>();
+#endif
         isOldEventSystem = !(sceneEventSystem == null);
         if (!isOldEventSystem)
         {
