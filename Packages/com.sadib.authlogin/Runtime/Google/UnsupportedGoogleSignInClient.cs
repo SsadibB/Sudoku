@@ -11,7 +11,7 @@ namespace SadibTools.AuthLogin
         public void RequestServerAuthCode(
             string webClientId,
             bool silent,
-            Action<GoogleNativeAccount> onSuccess,
+            Action<string> onSuccess,
             Action<AuthError> onFailure)
         {
             onFailure?.Invoke(AuthError.Unsupported(

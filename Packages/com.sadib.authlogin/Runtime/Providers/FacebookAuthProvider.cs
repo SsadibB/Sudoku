@@ -6,19 +6,21 @@ namespace SadibTools.AuthLogin
 {
     /// <summary>
     /// Facebook or Instagram (via Facebook Login) -> PlayFab LoginWithFacebook.
-    /// Captures Facebook Profile Picture URL with authenticated access token.
+    /// Meta does not offer a separate consumer Instagram login token for PlayFab;
+    /// Instagram uses Facebook Login with Instagram permissions.
     /// </summary>
     public class FacebookAuthProvider : IAuthProvider
     {
         public const string FacebookId = "facebook";
         public const string InstagramId = "instagram";
 
+        // Request only permissions enabled under Meta Use Cases. Extra scopes (email, instagram_basic)
+        // make Facebook show "Sorry, something went wrong" until those permissions are added.
         public static readonly string[] FacebookPermissions = { "public_profile" };
         public static readonly string[] InstagramPermissions = { "public_profile" };
 
         public string ProviderId { get; }
         public bool IsSignedIn { get; private set; }
-        public string LastPhotoUrl { get; private set; }
 
         private readonly AuthSettings _settings;
         private readonly bool _createPlayFabAccountIfMissing;
@@ -61,11 +63,7 @@ namespace SadibTools.AuthLogin
                 _settings.FacebookAppId,
                 _settings.FacebookClientToken,
                 _permissions,
-                nativeAccount =>
-                {
-                    LastPhotoUrl = nativeAccount?.PhotoUrl;
-                    LoginToPlayFab(nativeAccount?.AccessToken, onSuccess, onFailure);
-                },
+                accessToken => LoginToPlayFab(accessToken, onSuccess, onFailure),
                 error =>
                 {
                     IsSignedIn = false;
@@ -78,7 +76,6 @@ namespace SadibTools.AuthLogin
             _facebook.SignOut();
             PlayFabClientAPI.ForgetAllCredentials();
             IsSignedIn = false;
-            LastPhotoUrl = null;
         }
 
         private void LoginToPlayFab(string accessToken, Action<LoginResult> onSuccess, Action<AuthError> onFailure)

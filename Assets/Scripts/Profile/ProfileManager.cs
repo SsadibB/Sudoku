@@ -1,11 +1,9 @@
-using System;
 using System.Collections;
 using System.IO;
 using TMPro;
 using UnityEngine;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
-using Random = UnityEngine.Random;
 
 #if UNITY_STANDALONE || UNITY_EDITOR
 using SFB; // Standalone File Browser — https://github.com/gkngkc/UnityStandaloneFileBrowser
@@ -50,7 +48,6 @@ public class ProfileManager : MonoBehaviour
     [Header("Display")]
     [SerializeField] private Image profileIconImage;     // small icon shown outside the panel
     [SerializeField] private Image profilePreviewImage;  // larger preview inside the panel
-    [SerializeField] private TMP_Text playerNameText;    // player name text in profile panel
 
     [Header("Actions")]
     [SerializeField] private Button uploadButton;
@@ -146,8 +143,7 @@ public class ProfileManager : MonoBehaviour
             return;
         }
         Instance = this;
-        if (Application.isPlaying)
-            DontDestroyOnLoad(gameObject);
+        DontDestroyOnLoad(gameObject);
 
         // -- Load persisted state --
         ProfileLevel = Mathf.Max(1, PlayerPrefs.GetInt(ProfileLevelKey, 1));
@@ -158,7 +154,6 @@ public class ProfileManager : MonoBehaviour
         BestWinStreak = Mathf.Max(0, PlayerPrefs.GetInt(BestStreakKey, 0));
 
         // -- Panel wiring --
-        AutoDiscoverAndBindUI();
         if (profileIconButton != null) profileIconButton.onClick.AddListener(OpenPanel);
         if (closeButton != null) closeButton.onClick.AddListener(ClosePanel);
         if (uploadButton != null) uploadButton.onClick.AddListener(OnUploadClicked);
@@ -174,123 +169,6 @@ public class ProfileManager : MonoBehaviour
 
     private void Start()
     {
-        AutoDiscoverAndBindUI();
-        LoadSavedProfilePicture();
-        RefreshPlayerName();
-    }
-
-    public void SetPlayerName(string newName)
-    {
-        if (string.IsNullOrEmpty(newName)) return;
-        PlayerPrefs.SetString("PlayerProfileName", newName);
-        PlayerPrefs.Save();
-        RefreshPlayerName();
-    }
-
-    public void RefreshPlayerName()
-    {
-        if (playerNameText == null)
-            FindPlayerNameText();
-
-        string savedName = PlayerPrefs.GetString("PlayerProfileName", "Luffy");
-        if (playerNameText != null && !string.IsNullOrEmpty(savedName))
-        {
-            playerNameText.text = savedName;
-        }
-    }
-
-    private void FindPlayerNameText()
-    {
-        var allTMP = FindObjectsByType<TMP_Text>(FindObjectsInactive.Include);
-        foreach (var t in allTMP)
-        {
-            if (t.transform.parent != null && t.transform.parent.gameObject.name.ToLowerInvariant().Contains("profilename"))
-            {
-                playerNameText = t;
-                return;
-            }
-        }
-    }
-
-    public void ApplyCustomAvatarTexture(Texture2D texture)
-    {
-        if (texture == null) return;
-        Texture2D resized = LoadAndResizeTexture(texture.EncodeToPNG(), maxImageSize) ?? texture;
-        ApplySprite(SpriteFromTexture(resized));
-        SaveCustomImage(resized);
-    }
-
-    private void OnEnable()
-    {
-        if (SadibTools.AuthLogin.AuthManager.Instance != null)
-        {
-            SadibTools.AuthLogin.AuthManager.Instance.OnLoginSuccess += HandleAuthLoginSuccess;
-            SadibTools.AuthLogin.AuthManager.Instance.OnSignedOut += HandleAuthSignedOut;
-        }
-    }
-
-    private void OnDisable()
-    {
-        if (SadibTools.AuthLogin.AuthManager.Instance != null)
-        {
-            SadibTools.AuthLogin.AuthManager.Instance.OnLoginSuccess -= HandleAuthLoginSuccess;
-            SadibTools.AuthLogin.AuthManager.Instance.OnSignedOut -= HandleAuthSignedOut;
-        }
-    }
-
-    private void HandleAuthLoginSuccess(SadibTools.AuthLogin.AuthSession session)
-    {
-        if (session == null) return;
-
-        if (!string.IsNullOrEmpty(session.DisplayName))
-        {
-            SetPlayerName(session.DisplayName);
-        }
-
-        if (!string.IsNullOrEmpty(session.AvatarUrl))
-        {
-            StartCoroutine(DownloadAndApplyAvatar(session.AvatarUrl));
-        }
-    }
-
-    private void HandleAuthSignedOut(string providerId)
-    {
-        if (SadibTools.AuthLogin.AuthManager.Instance == null || !SadibTools.AuthLogin.AuthManager.Instance.IsSignedIn)
-        {
-            RestoreDefaultProfile();
-        }
-    }
-
-    private IEnumerator DownloadAndApplyAvatar(string url)
-    {
-        if (string.IsNullOrEmpty(url)) yield break;
-
-        Debug.Log("[ProfileManager] Downloading avatar from: " + url);
-
-        using (var request = UnityEngine.Networking.UnityWebRequestTexture.GetTexture(url))
-        {
-            yield return request.SendWebRequest();
-
-            if (request.result == UnityEngine.Networking.UnityWebRequest.Result.Success)
-            {
-                var texture = UnityEngine.Networking.DownloadHandlerTexture.GetContent(request);
-                if (texture != null)
-                {
-                    Debug.Log($"[ProfileManager] Avatar downloaded successfully ({texture.width}x{texture.height}). Applying...");
-                    ApplyCustomAvatarTexture(texture);
-                }
-            }
-            else
-            {
-                Debug.LogWarning("[ProfileManager] Failed to download avatar from: " + url + " - " + request.error);
-            }
-        }
-    }
-
-    public void RestoreDefaultProfile()
-    {
-        PlayerPrefs.DeleteKey("PlayerProfileName");
-        RefreshPlayerName();
         LoadSavedProfilePicture();
     }
 
@@ -321,7 +199,6 @@ public class ProfileManager : MonoBehaviour
         closeButton = fresh.closeButton;
         profileIconImage = fresh.profileIconImage;
         profilePreviewImage = fresh.profilePreviewImage;
-        playerNameText = fresh.playerNameText;
         uploadButton = fresh.uploadButton;
 
         easyHighScoreText = fresh.easyHighScoreText;
@@ -340,7 +217,6 @@ public class ProfileManager : MonoBehaviour
         // before this reload and otherwise wouldn't show until they changed.
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
         RefreshStatsDisplay();
-        RefreshPlayerName();
 
         ForceClosePanel();
         StartCoroutine(SuppressIconClickBriefly());
@@ -359,101 +235,14 @@ public class ProfileManager : MonoBehaviour
 
     // ==================== Panel open/close ====================
 
-    public void AutoDiscoverAndBindUI()
-    {
-        // 1. Discover ProfilePanel if null
-        if (profilePanel == null)
-        {
-            var allTransforms = FindObjectsByType<Transform>(FindObjectsInactive.Include);
-            foreach (var t in allTransforms)
-            {
-                if (t.gameObject.name.Equals("ProfilePanel", StringComparison.OrdinalIgnoreCase))
-                {
-                    profilePanel = t.gameObject;
-                    break;
-                }
-            }
-        }
-
-        // 2. Discover Profile Button (whether on Profile, Avatar, etc.)
-        var allButtons = FindObjectsByType<Button>(FindObjectsInactive.Include);
-        foreach (var b in allButtons)
-        {
-            string n = b.gameObject.name.ToLowerInvariant();
-            if (n == "profile" || n == "profileicon" || n == "avatar" || n.Contains("profilebutton"))
-            {
-                // Ensure this is not inside the panel (e.g. close/upload)
-                if (profilePanel == null || !b.transform.IsChildOf(profilePanel.transform))
-                {
-                    profileIconButton = b;
-                    EnsureButtonRaycastable(b);
-                    b.onClick.RemoveListener(OpenPanel);
-                    b.onClick.AddListener(OpenPanel);
-                }
-            }
-        }
-
-        // 3. Discover Close Button
-        if (closeButton == null && profilePanel != null)
-        {
-            var panelButtons = profilePanel.GetComponentsInChildren<Button>(includeInactive: true);
-            foreach (var b in panelButtons)
-            {
-                if (b.gameObject.name.ToLowerInvariant().Contains("close"))
-                {
-                    closeButton = b;
-                    EnsureButtonRaycastable(b);
-                    b.onClick.RemoveListener(ClosePanel);
-                    b.onClick.AddListener(ClosePanel);
-                    break;
-                }
-            }
-        }
-
-        // 4. Discover Images
-        EnsureAvatarImagesFound();
-    }
-
-    private void EnsureButtonRaycastable(Button btn)
-    {
-        if (btn == null) return;
-        var graphic = btn.targetGraphic;
-        if (graphic != null)
-        {
-            graphic.raycastTarget = true;
-        }
-        else
-        {
-            var img = btn.GetComponent<Image>() ?? btn.GetComponentInChildren<Image>(includeInactive: true);
-            if (img != null)
-            {
-                btn.targetGraphic = img;
-                img.raycastTarget = true;
-            }
-        }
-    }
-
-    public void OpenPanel()
+    private void OpenPanel()
     {
         Debug.Log($"[ProfileManager] OpenPanel() called. Frame: {Time.frameCount}");
-        if (profilePanel == null)
-            AutoDiscoverAndBindUI();
-
-        if (profilePanel != null)
-        {
-            profilePanel.SetActive(true);
-            RefreshStatsDisplay();
-            RefreshPlayerName();
-            if (currentAvatarSprite != null)
-                ApplySprite(currentAvatarSprite);
-        }
-        else
-        {
-            Debug.LogWarning("[ProfileManager] OpenPanel() failed — profilePanel could not be found!");
-        }
+        if (profilePanel != null) profilePanel.SetActive(true);
+        RefreshStatsDisplay();
     }
 
-    public void ClosePanel()
+    private void ClosePanel()
     {
         if (profilePanel != null)
         {
@@ -627,135 +416,9 @@ public class ProfileManager : MonoBehaviour
     // Image references after a scene reload, without re-reading disk/prefs.
     private Sprite currentAvatarSprite;
 
-    private void EnsureAvatarImagesFound()
-    {
-        if (profileIconImage == null || (profileIconImage == profilePreviewImage && profileIconButton != null))
-        {
-            if (profileIconButton != null)
-            {
-                var img = profileIconButton.GetComponent<Image>() ?? profileIconButton.GetComponentInChildren<Image>(includeInactive: true);
-                if (img != null) profileIconImage = img;
-            }
-        }
-
-        if (profilePreviewImage == null || profilePreviewImage == profileIconImage)
-        {
-            var allImages = FindObjectsByType<Image>(FindObjectsInactive.Include);
-            foreach (var img in allImages)
-            {
-                if (img.gameObject.name.ToLowerInvariant().Contains("profileimage"))
-                {
-                    profilePreviewImage = img;
-                    break;
-                }
-            }
-        }
-    }
-
-    public void EnsureAvatarMasking()
-    {
-        EnsureAvatarImagesFound();
-
-        // 1. Profile Panel Preview Image Masking
-        if (profilePreviewImage != null)
-        {
-            Transform avatarParent = profilePreviewImage.transform.parent;
-            if (avatarParent != null)
-            {
-                Transform bgTransform = avatarParent.Find("BG");
-                if (bgTransform != null)
-                {
-                    var bgImg = bgTransform.GetComponent<Image>();
-                    if (bgImg != null)
-                    {
-                        var mask = bgTransform.GetComponent<Mask>();
-                        if (mask == null)
-                        {
-                            mask = bgTransform.gameObject.AddComponent<Mask>();
-                            mask.showMaskGraphic = true;
-                        }
-
-                        if (profilePreviewImage.transform.parent != bgTransform)
-                        {
-                            profilePreviewImage.transform.SetParent(bgTransform, worldPositionStays: true);
-                        }
-                    }
-                }
-                else
-                {
-                    var mask = avatarParent.GetComponent<Mask>();
-                    if (mask == null)
-                    {
-                        var parentImg = avatarParent.GetComponent<Image>();
-                        if (parentImg != null)
-                        {
-                            mask = avatarParent.gameObject.AddComponent<Mask>();
-                            mask.showMaskGraphic = true;
-                        }
-                        else
-                        {
-                            var rectMask = avatarParent.GetComponent<RectMask2D>();
-                            if (rectMask == null)
-                                avatarParent.gameObject.AddComponent<RectMask2D>();
-                        }
-                    }
-                }
-            }
-        }
-
-        // 2. Top-Left Profile Icon Masking
-        if (profileIconImage != null)
-        {
-            Transform iconParent = profileIconImage.transform.parent;
-            if (iconParent != null && iconParent != profileIconImage.transform)
-            {
-                Transform bgTransform = iconParent.Find("BG");
-                if (bgTransform != null)
-                {
-                    var bgImg = bgTransform.GetComponent<Image>();
-                    if (bgImg != null)
-                    {
-                        var mask = bgTransform.GetComponent<Mask>();
-                        if (mask == null)
-                        {
-                            mask = bgTransform.gameObject.AddComponent<Mask>();
-                            mask.showMaskGraphic = true;
-                        }
-
-                        if (profileIconImage.transform.parent != bgTransform)
-                        {
-                            profileIconImage.transform.SetParent(bgTransform, worldPositionStays: true);
-                        }
-                    }
-                }
-                else
-                {
-                    var mask = iconParent.GetComponent<Mask>();
-                    if (mask == null)
-                    {
-                        var parentImg = iconParent.GetComponent<Image>();
-                        if (parentImg != null)
-                        {
-                            mask = iconParent.gameObject.AddComponent<Mask>();
-                            mask.showMaskGraphic = true;
-                        }
-                        else
-                        {
-                            var rectMask = iconParent.GetComponent<RectMask2D>();
-                            if (rectMask == null)
-                                iconParent.gameObject.AddComponent<RectMask2D>();
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     private void ApplySprite(Sprite sprite)
     {
         currentAvatarSprite = sprite;
-        EnsureAvatarImagesFound();
-        EnsureAvatarMasking();
         if (profileIconImage != null) profileIconImage.sprite = sprite;
         if (profilePreviewImage != null) profilePreviewImage.sprite = sprite;
     }

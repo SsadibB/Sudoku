@@ -17,7 +17,7 @@ namespace SadibTools.AuthLogin
             string appId,
             string clientToken,
             string[] permissions,
-            Action<FacebookNativeAccount> onSuccess,
+            Action<string> onSuccess,
             Action<AuthError> onFailure)
         {
 #if UNITY_EDITOR
