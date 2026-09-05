@@ -27,8 +27,11 @@ public class UIManager : MonoBehaviour
     [Header("Difficulty Panel - Mode Selection")]
     [Tooltip("SinglePlayer is the only playable mode right now. Shown together with the difficulty posters, not gating them.")]
     [SerializeField] private Button singlePlayerButton;
-    [Tooltip("Not implemented yet. Kept non-interactable so it shows its Disabled Color state in the Inspector.")]
+    [Tooltip("Opens the Multiplayer lobby panel (International + Competition).")]
     [SerializeField] private Button multiPlayerButton;
+
+    [Header("Multiplayer Lobby")]
+    [SerializeField] private MultiplayerLobbyUI multiplayerLobbyUI;
 
     [Header("Difficulty Posters")]
     [SerializeField] private Button easyPoster;
@@ -190,10 +193,8 @@ public class UIManager : MonoBehaviour
             settingsPanel.SetActive(false);
         }
 
-        // MultiPlayer isn't implemented yet - keep it non-interactable so it
-        // renders with its Disabled Color (set on the Button component in
-        // the Inspector) instead of looking clickable.
-        if (multiPlayerButton != null) multiPlayerButton.interactable = false;
+        // MultiPlayer — now implemented; make it interactable and register listener
+        if (multiPlayerButton != null) multiPlayerButton.interactable = true;
 
         SetupLanguageDropdown();
         SyncLanguageLabel();
@@ -239,6 +240,7 @@ public class UIManager : MonoBehaviour
         if (backButton != null) backButton.onClick.AddListener(OnBackClicked);
 
         if (singlePlayerButton != null) singlePlayerButton.onClick.AddListener(OnSinglePlayerClicked);
+        if (multiPlayerButton != null)  multiPlayerButton.onClick.AddListener(OnMultiPlayerClicked);
 
         if (easyPoster != null) easyPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Easy));
         if (mediumPoster != null) mediumPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Medium));
@@ -264,6 +266,7 @@ public class UIManager : MonoBehaviour
         if (playButton != null) playButton.onClick.RemoveListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.RemoveListener(OnBackClicked);
         if (singlePlayerButton != null) singlePlayerButton.onClick.RemoveListener(OnSinglePlayerClicked);
+        if (multiPlayerButton != null)  multiPlayerButton.onClick.RemoveListener(OnMultiPlayerClicked);
 
         if (settingsButton != null) settingsButton.onClick.RemoveListener(OnSettingsClicked);
         if (closeSettingsButton != null) closeSettingsButton.onClick.RemoveListener(OnCloseSettingsClicked);
@@ -377,11 +380,40 @@ public class UIManager : MonoBehaviour
 
     // SinglePlayer is the only playable mode right now, shown together with
     // the difficulty posters rather than gating them. Tapping it is just
-    // confirmation feedback - MultiPlayer has no listener since its button
-    // stays non-interactable.
+    // confirmation feedback.
     private void OnSinglePlayerClicked()
     {
         PlayButtonSfx();
+    }
+
+    // Opens the multiplayer lobby panel.
+    private void OnMultiPlayerClicked()
+    {
+        PlayButtonSfx();
+
+        // Hide difficulty panel buttons while the lobby is open
+        if (settingsButton != null)  settingsButton.gameObject.SetActive(false);
+        if (aboutButton != null)     aboutButton.gameObject.SetActive(false);
+        if (playButton != null)      playButton.gameObject.SetActive(false);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
+
+        HideDifficultyPanel(() =>
+        {
+            if (multiplayerLobbyUI != null) multiplayerLobbyUI.Show();
+        });
+    }
+
+    /// <summary>
+    /// Called by MultiplayerLobbyUI when the player backs out to the main menu.
+    /// Restores the main menu buttons and restarts the play button pulse.
+    /// </summary>
+    public void RestoreMainMenuButtons()
+    {
+        if (playButton != null)        playButton.gameObject.SetActive(true);
+        if (settingsButton != null)    settingsButton.gameObject.SetActive(true);
+        if (aboutButton != null)       aboutButton.gameObject.SetActive(true);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
+        StartPlayButtonPulse();
     }
 
     // Shared click SFX played by every button on this screen.

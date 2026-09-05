@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: afce970a5c02a844dbad6c01bac2eeef
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267958
+  packageName: Photon Fusion - Multiplayer SDK
+  packageVersion: 2.0.12
+  assetPath: Assets/Photon/Fusion/Assemblies/Release/Fusion.Common.dll.release
+  uploadId: 945812

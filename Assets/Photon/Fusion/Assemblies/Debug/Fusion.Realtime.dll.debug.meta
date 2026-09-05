@@ -1,0 +1,14 @@
+fileFormatVersion: 2
+guid: b42b89414e7ee9d4dab7c757438ac60f
+DefaultImporter:
+  externalObjects: {}
+  userData: 
+  assetBundleName: 
+  assetBundleVariant: 
+AssetOrigin:
+  serializedVersion: 1
+  productId: 267958
+  packageName: Photon Fusion - Multiplayer SDK
+  packageVersion: 2.0.12
+  assetPath: Assets/Photon/Fusion/Assemblies/Debug/Fusion.Realtime.dll.debug
+  uploadId: 945812

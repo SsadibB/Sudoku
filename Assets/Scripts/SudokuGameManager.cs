@@ -115,6 +115,12 @@ public class SudokuGameManager : MonoBehaviour
 
     private Coroutine randomSfxCoroutine;
 
+    // ---- Multiplayer hooks (fired by the existing game logic) ----
+    // OnCellCorrect(row, col, value) — fired each time a correct number locks in
+    public event System.Action<int, int, int> OnCellCorrect;
+    // OnBoardComplete — fired when the board is fully solved (victory)
+    public event System.Action OnBoardComplete;
+
     private int[,] solutionGrid;
     private int[,] puzzleGrid;
     private bool isGameActive;
@@ -432,6 +438,9 @@ public class SudokuGameManager : MonoBehaviour
             CheckSectionCompletion(row, col);
             UpdateScoreHud();
 
+            // ---- Multiplayer hook ----
+            OnCellCorrect?.Invoke(row, col, number);
+
             UpdateCompletedNumbers();
             CheckWinCondition();
         }
@@ -709,7 +718,14 @@ public class SudokuGameManager : MonoBehaviour
         LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
         ProfileManager.Instance?.RecordVictory(currentDifficulty, sessionScore);
 
-        ShowOutputPanel(isVictory: true);
+        // ---- Multiplayer hook ----
+        OnBoardComplete?.Invoke();
+
+        // In multiplayer the result is shown by MultiplayerResultPanel; skip
+        // the single-player output panel so the two don't stack.
+        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        if (!isMultiplayer)
+            ShowOutputPanel(isVictory: true);
     }
 
     private int GetProfileXPForDifficulty(UIManager.Difficulty difficulty)
@@ -984,5 +1000,34 @@ public class SudokuGameManager : MonoBehaviour
     {
         StopRandomSfxLoop();
         PromptDifficultySelection();
+    }
+
+    // ====================================================================
+    //  MULTIPLAYER SUPPORT
+    // ====================================================================
+
+    /// <summary>
+    /// Returns the raw puzzle grid (0 = empty, 1–9 = fixed clue).
+    /// Used by NetworkSudokuPlayer to initialise the board snapshot.
+    /// </summary>
+    public int[,] GetCurrentPuzzle() => puzzleGrid;
+
+    /// <summary>
+    /// Snapshot of the live board as a flat 81-byte array (row*9+col).
+    /// Value = 0 for empty/wrong cells, 1–9 for correct/fixed cells.
+    /// Used by OpponentBoardPanel when the remote player is the local client.
+    /// </summary>
+    public byte[] GetBoardSnapshot()
+    {
+        byte[] snap = new byte[81];
+        if (gridLayout == null || gridLayout.Cells == null) return snap;
+        for (int r = 0; r < 9; r++)
+            for (int c = 0; c < 9; c++)
+            {
+                SudokuCell cell = gridLayout.Cells[r, c];
+                if (cell != null && cell.IsCorrect)
+                    snap[r * 9 + c] = (byte)cell.GetNumber();
+            }
+        return snap;
     }
 }
