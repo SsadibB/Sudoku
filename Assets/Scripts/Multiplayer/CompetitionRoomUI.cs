@@ -162,11 +162,18 @@ public class CompetitionRoomUI : MonoBehaviour
     {
         if (MultiplayerManager.Instance == null) return;
         string code = await MultiplayerManager.Instance.CreateCompetitionRoom(difficulty);
-        if (code == null)
+        if (!string.IsNullOrEmpty(code))
         {
-            if (hostStatusText != null) hostStatusText.text = "Failed to create room. Try again.";
+            if (roomCodeText != null) roomCodeText.text = code;
+            if (hostStatusText != null) hostStatusText.text = "Share this code. Waiting for opponent…";
         }
-        // Room code display is handled by OnRoomCodeGenerated event
+        else
+        {
+            if (hostStatusText != null && !hostStatusText.text.StartsWith("Failed:"))
+            {
+                hostStatusText.text = "Failed to create room. Try again.";
+            }
+        }
     }
 
     private void OnRoomCodeGenerated(string code)
@@ -218,6 +225,8 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private void OnConnectionFailed(string reason)
     {
+        Debug.LogError($"[CompetitionRoomUI] Connection failed: {reason}");
+        if (hostStatusText != null) hostStatusText.text = $"Failed: {reason}";
         if (joinStatusText != null) joinStatusText.text = $"Could not join: {reason}";
         if (joinConfirmButton != null) joinConfirmButton.interactable = true;
     }

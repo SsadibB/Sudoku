@@ -94,9 +94,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         IsMultiplayerGame = true;
         waitingForOpponent = true;
 
-        if (Runner != null) await ShutdownRunner();
-        Runner = gameObject.AddComponent<NetworkRunner>();
-        Runner.ProvideInput = true;
+        var runner = await CreateNetworkRunner();
+        var appSettings = GetPhotonAppSettings();
 
         // Custom room properties used for matchmaking filter
         var sessionProps = new Dictionary<string, SessionProperty>
@@ -108,17 +107,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         var startArgs = new StartGameArgs
         {
             GameMode = GameMode.Shared,
+            Address = NetAddress.Any(),
             SessionName = null, // Let Photon pick an existing room
             PlayerCount = MaxPlayersPerRoom,
             SessionProperties = sessionProps,
-            SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>()
+            CustomPhotonAppSettings = appSettings,
+            Scene = GetStartGameSceneInfo(),
+            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
         };
 
-        var result = await Runner.StartGame(startArgs);
+        var result = await runner.StartGame(startArgs);
         if (!result.Ok)
         {
+            Debug.LogError($"[MultiplayerManager] StartInternational StartGame failed. ShutdownReason: {result.ShutdownReason}");
             IsMultiplayerGame = false;
             OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
+            await ShutdownRunner();
             return;
         }
 
@@ -139,9 +144,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         string roomCode = GenerateRoomCode();
 
-        if (Runner != null) await ShutdownRunner();
-        Runner = gameObject.AddComponent<NetworkRunner>();
-        Runner.ProvideInput = true;
+        var runner = await CreateNetworkRunner();
+        var appSettings = GetPhotonAppSettings();
 
         var sessionProps = new Dictionary<string, SessionProperty>
         {
@@ -153,17 +157,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         var startArgs = new StartGameArgs
         {
             GameMode = GameMode.Shared,
+            Address = NetAddress.Any(),
             SessionName = "COMP_" + roomCode,
             PlayerCount = MaxPlayersPerRoom,
             SessionProperties = sessionProps,
-            SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>()
+            CustomPhotonAppSettings = appSettings,
+            Scene = GetStartGameSceneInfo(),
+            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
         };
 
-        var result = await Runner.StartGame(startArgs);
+        var result = await runner.StartGame(startArgs);
         if (!result.Ok)
         {
+            Debug.LogError($"[MultiplayerManager] CreateCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
             IsMultiplayerGame = false;
             OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
+            await ShutdownRunner();
             return null;
         }
 
@@ -178,28 +188,34 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         IsHost = false;
         IsMultiplayerGame = true;
 
-        if (Runner != null) await ShutdownRunner();
-        Runner = gameObject.AddComponent<NetworkRunner>();
-        Runner.ProvideInput = true;
+        var runner = await CreateNetworkRunner();
+        var appSettings = GetPhotonAppSettings();
 
         var startArgs = new StartGameArgs
         {
             GameMode = GameMode.Shared,
+            Address = NetAddress.Any(),
             SessionName = "COMP_" + roomCode.ToUpper().Trim(),
             PlayerCount = MaxPlayersPerRoom,
-            SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>()
+            CustomPhotonAppSettings = appSettings,
+            Scene = GetStartGameSceneInfo(),
+            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
         };
 
-        var result = await Runner.StartGame(startArgs);
+        var result = await runner.StartGame(startArgs);
         if (!result.Ok)
         {
+            Debug.LogError($"[MultiplayerManager] JoinCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
             IsMultiplayerGame = false;
-            OnConnectionFailed?.Invoke("Room not found or full.");
+            OnConnectionFailed?.Invoke($"Room not found or failed ({result.ShutdownReason}).");
+            await ShutdownRunner();
             return;
         }
 
         // Grab the difficulty from the room's session properties
-        if (Runner.SessionInfo.Properties.TryGetValue("Difficulty", out SessionProperty diffProp))
+        if (runner.SessionInfo != null && runner.SessionInfo.Properties != null &&
+            runner.SessionInfo.Properties.TryGetValue("Difficulty", out SessionProperty diffProp))
         {
             MatchDifficulty = (UIManager.Difficulty)(int)diffProp;
         }
@@ -224,12 +240,84 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     //  PRIVATE HELPERS
     // ====================================================================
 
+    private NetworkSceneInfo GetStartGameSceneInfo()
+    {
+        var sceneInfo = new NetworkSceneInfo();
+        var activeScene = SceneManager.GetActiveScene();
+        if (activeScene.IsValid() && activeScene.buildIndex >= 0)
+        {
+            sceneInfo.AddSceneRef(SceneRef.FromIndex(activeScene.buildIndex), LoadSceneMode.Additive);
+        }
+        return sceneInfo;
+    }
+
+    private Fusion.Photon.Realtime.FusionAppSettings GetPhotonAppSettings()
+    {
+        if (Fusion.Photon.Realtime.PhotonAppSettings.TryGetGlobal(out var global) && global.AppSettings != null)
+        {
+            return global.AppSettings;
+        }
+
+        var settingsAsset = Resources.Load<Fusion.Photon.Realtime.PhotonAppSettings>("PhotonAppSettings");
+        if (settingsAsset != null && settingsAsset.AppSettings != null)
+        {
+            return settingsAsset.AppSettings;
+        }
+
+        Debug.LogWarning("[MultiplayerManager] PhotonAppSettings asset not found in Resources! Using global fallback.");
+        return null;
+    }
+
+    private async Task<NetworkRunner> CreateNetworkRunner()
+    {
+        if (Runner != null)
+        {
+            await ShutdownRunner();
+        }
+
+        foreach (var r in new List<NetworkRunner>(NetworkRunner.Instances))
+        {
+            if (r != null)
+            {
+                try { r.RemoveCallbacks(this); } catch {}
+                try { await r.Shutdown(); } catch {}
+                if (r.gameObject != null) Destroy(r.gameObject);
+            }
+        }
+
+        var runnerGO = new GameObject("FusionNetworkRunner");
+        DontDestroyOnLoad(runnerGO);
+
+        var runner = runnerGO.AddComponent<NetworkRunner>();
+        runner.ProvideInput = true;
+        runner.AddCallbacks(this); // Callbacks MUST be added before StartGame!
+
+        runnerGO.AddComponent<NetworkSceneManagerDefault>();
+        runnerGO.AddComponent<NetworkObjectProviderDefault>();
+
+        Runner = runner;
+        return runner;
+    }
+
     private async Task ShutdownRunner()
     {
         if (Runner == null) return;
-        await Runner.Shutdown();
-        Destroy(Runner);
+        var r = Runner;
         Runner = null;
+
+        try
+        {
+            await r.Shutdown();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"ShutdownRunner exception ignored: {ex.Message}");
+        }
+
+        if (r != null && r.gameObject != null)
+        {
+            Destroy(r.gameObject);
+        }
     }
 
     private string GenerateRoomCode()

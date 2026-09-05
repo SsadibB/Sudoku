@@ -120,10 +120,21 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         if (lobbyPanel == null) return;
         lobbyPanel.SetActive(true);
+
+        RectTransform rt = lobbyPanel.GetComponent<RectTransform>();
+        if (rt != null)
+        {
+            Vector3 pos = rt.anchoredPosition3D;
+            pos.z = 0f;
+            rt.anchoredPosition3D = pos;
+        }
+
         lobbyPanel.transform.localScale = Vector3.zero;
 
         CanvasGroup cg = GetOrAddCG(lobbyPanel);
         cg.alpha = 0f;
+        cg.interactable = true;
+        cg.blocksRaycasts = true;
 
         DOTween.Sequence()
             .Append(lobbyPanel.transform.DOScale(1f, animDuration).SetEase(Ease.OutBack))
