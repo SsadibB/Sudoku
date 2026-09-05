@@ -13,7 +13,25 @@ using Fusion.Sockets;
 /// </summary>
 public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 {
-    public static MultiplayerManager Instance { get; private set; }
+    private static MultiplayerManager _instance;
+    public static MultiplayerManager Instance
+    {
+        get
+        {
+            if (_instance == null)
+            {
+                _instance = FindAnyObjectByType<MultiplayerManager>();
+                if (_instance == null)
+                {
+                    var go = new GameObject("MultiplayerManager");
+                    _instance = go.AddComponent<MultiplayerManager>();
+                    DontDestroyOnLoad(go);
+                }
+            }
+            return _instance;
+        }
+        private set { _instance = value; }
+    }
 
     // ---- Events ----
     public event Action OnConnectedToRoom;
@@ -50,12 +68,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     // calls run.
     private void Awake()
     {
-        if (Instance != null && Instance != this)
+        if (_instance != null && _instance != this)
         {
             Destroy(gameObject);
             return;
         }
-        Instance = this;
+        _instance = this;
         DontDestroyOnLoad(gameObject);
         RefreshLocalPlayerName();
     }
@@ -81,6 +99,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
+    private bool isStartingGame = false;
+
     // ====================================================================
     //  PUBLIC API
     // ====================================================================
@@ -88,139 +108,155 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     /// <summary>Start International matchmaking for the given difficulty.</summary>
     public async void StartInternational(UIManager.Difficulty difficulty)
     {
-        RefreshLocalPlayerName();
-        MatchDifficulty = difficulty;
-        IsHost = false;
-        IsMultiplayerGame = true;
-        waitingForOpponent = true;
-
-        var runner = await CreateNetworkRunner();
-        var appSettings = GetPhotonAppSettings();
-
-        // Custom room properties used for matchmaking filter
-        var sessionProps = new Dictionary<string, SessionProperty>
+        if (isStartingGame)
         {
-            { "Difficulty", (int)difficulty },
-            { "Mode", 0 } // 0 = International
-        };
-
-        var startArgs = new StartGameArgs
-        {
-            GameMode = GameMode.Shared,
-            Address = NetAddress.Any(),
-            SessionName = null, // Let Photon pick an existing room
-            PlayerCount = MaxPlayersPerRoom,
-            SessionProperties = sessionProps,
-            CustomPhotonAppSettings = appSettings,
-            Scene = GetStartGameSceneInfo(),
-            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
-            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
-        };
-
-        var result = await runner.StartGame(startArgs);
-        if (!result.Ok)
-        {
-            Debug.LogError($"[MultiplayerManager] StartInternational StartGame failed. ShutdownReason: {result.ShutdownReason}");
-            IsMultiplayerGame = false;
-            OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
-            await ShutdownRunner();
+            Debug.LogWarning("[MultiplayerManager] StartInternational ignored: already starting a session.");
             return;
         }
+        isStartingGame = true;
 
-        // Start timeout coroutine — fires OnMatchmakingTimeout after 60 s
-        // if we still haven't seen a second player
-        if (matchmakingTimeoutCoroutine != null) StopCoroutine(matchmakingTimeoutCoroutine);
-        matchmakingTimeoutCoroutine = StartCoroutine(MatchmakingTimeoutRoutine());
+        try
+        {
+            RefreshLocalPlayerName();
+            MatchDifficulty = difficulty;
+            IsHost = false;
+            IsMultiplayerGame = true;
+            waitingForOpponent = true;
+
+            var runner = await CreateNetworkRunner();
+
+            var startArgs = new StartGameArgs
+            {
+                GameMode = GameMode.Shared,
+                Address = NetAddress.Any(),
+                SessionName = $"INT_{(int)difficulty}",
+                Scene = GetStartGameSceneInfo(),
+                PlayerCount = 2,
+                CustomPhotonAppSettings = GetPhotonAppSettings(),
+                SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+                ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
+            };
+
+            var result = await runner.StartGame(startArgs);
+            if (!result.Ok)
+            {
+                Debug.LogError($"[MultiplayerManager] StartInternational StartGame failed. ShutdownReason: {result.ShutdownReason}");
+                IsMultiplayerGame = false;
+                OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
+                await ShutdownRunner();
+                return;
+            }
+
+            // Start timeout coroutine — fires OnMatchmakingTimeout after 60 s
+            // if we still haven't seen a second player
+            if (matchmakingTimeoutCoroutine != null) StopCoroutine(matchmakingTimeoutCoroutine);
+            matchmakingTimeoutCoroutine = StartCoroutine(MatchmakingTimeoutRoutine());
+        }
+        finally
+        {
+            isStartingGame = false;
+        }
     }
 
     /// <summary>Create a Competition room as host. Returns the 6-char room code.</summary>
     public async Task<string> CreateCompetitionRoom(UIManager.Difficulty difficulty)
     {
-        RefreshLocalPlayerName();
-        MatchDifficulty = difficulty;
-        IsHost = true;
-        IsMultiplayerGame = true;
-        waitingForOpponent = true;
-
-        string roomCode = GenerateRoomCode();
-
-        var runner = await CreateNetworkRunner();
-        var appSettings = GetPhotonAppSettings();
-
-        var sessionProps = new Dictionary<string, SessionProperty>
+        if (isStartingGame)
         {
-            { "Difficulty", (int)difficulty },
-            { "Mode", 1 },          // 1 = Competition
-            { "RoomCode", roomCode }
-        };
-
-        var startArgs = new StartGameArgs
-        {
-            GameMode = GameMode.Shared,
-            Address = NetAddress.Any(),
-            SessionName = "COMP_" + roomCode,
-            PlayerCount = MaxPlayersPerRoom,
-            SessionProperties = sessionProps,
-            CustomPhotonAppSettings = appSettings,
-            Scene = GetStartGameSceneInfo(),
-            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
-            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
-        };
-
-        var result = await runner.StartGame(startArgs);
-        if (!result.Ok)
-        {
-            Debug.LogError($"[MultiplayerManager] CreateCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
-            IsMultiplayerGame = false;
-            OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
-            await ShutdownRunner();
+            Debug.LogWarning("[MultiplayerManager] CreateCompetitionRoom ignored: already starting a session.");
             return null;
         }
+        isStartingGame = true;
 
-        OnRoomCodeGenerated?.Invoke(roomCode);
-        return roomCode;
+        try
+        {
+            RefreshLocalPlayerName();
+            MatchDifficulty = difficulty;
+            IsHost = true;
+            IsMultiplayerGame = true;
+            waitingForOpponent = true;
+
+            string roomCode = GenerateRoomCode();
+
+            var runner = await CreateNetworkRunner();
+
+            var startArgs = new StartGameArgs
+            {
+                GameMode = GameMode.Shared,
+                Address = NetAddress.Any(),
+                SessionName = "COMP_" + roomCode,
+                Scene = GetStartGameSceneInfo(),
+                PlayerCount = 2,
+                CustomPhotonAppSettings = GetPhotonAppSettings(),
+                SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+                ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
+            };
+
+            var result = await runner.StartGame(startArgs);
+            if (!result.Ok)
+            {
+                Debug.LogError($"[MultiplayerManager] CreateCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
+                IsMultiplayerGame = false;
+                OnConnectionFailed?.Invoke(result.ShutdownReason.ToString());
+                await ShutdownRunner();
+                return null;
+            }
+
+            OnRoomCodeGenerated?.Invoke(roomCode);
+            return roomCode;
+        }
+        finally
+        {
+            isStartingGame = false;
+        }
     }
 
     /// <summary>Join an existing Competition room by room code (guest).</summary>
     public async void JoinCompetitionRoom(string roomCode)
     {
-        RefreshLocalPlayerName();
-        IsHost = false;
-        IsMultiplayerGame = true;
-
-        var runner = await CreateNetworkRunner();
-        var appSettings = GetPhotonAppSettings();
-
-        var startArgs = new StartGameArgs
+        if (isStartingGame)
         {
-            GameMode = GameMode.Shared,
-            Address = NetAddress.Any(),
-            SessionName = "COMP_" + roomCode.ToUpper().Trim(),
-            PlayerCount = MaxPlayersPerRoom,
-            CustomPhotonAppSettings = appSettings,
-            Scene = GetStartGameSceneInfo(),
-            SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
-            ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
-        };
-
-        var result = await runner.StartGame(startArgs);
-        if (!result.Ok)
-        {
-            Debug.LogError($"[MultiplayerManager] JoinCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
-            IsMultiplayerGame = false;
-            OnConnectionFailed?.Invoke($"Room not found or failed ({result.ShutdownReason}).");
-            await ShutdownRunner();
+            Debug.LogWarning("[MultiplayerManager] JoinCompetitionRoom ignored: already starting a session.");
             return;
         }
+        isStartingGame = true;
 
-        // Grab the difficulty from the room's session properties
-        if (runner.SessionInfo != null && runner.SessionInfo.Properties != null &&
-            runner.SessionInfo.Properties.TryGetValue("Difficulty", out SessionProperty diffProp))
+        try
         {
-            MatchDifficulty = (UIManager.Difficulty)(int)diffProp;
-        }
+            RefreshLocalPlayerName();
+            IsHost = false;
+            IsMultiplayerGame = true;
 
-        OnConnectedToRoom?.Invoke();
+            var runner = await CreateNetworkRunner();
+
+            var startArgs = new StartGameArgs
+            {
+                GameMode = GameMode.Shared,
+                Address = NetAddress.Any(),
+                SessionName = "COMP_" + roomCode.ToUpper().Trim(),
+                Scene = GetStartGameSceneInfo(),
+                PlayerCount = 2,
+                CustomPhotonAppSettings = GetPhotonAppSettings(),
+                SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+                ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
+            };
+
+            var result = await runner.StartGame(startArgs);
+            if (!result.Ok)
+            {
+                Debug.LogError($"[MultiplayerManager] JoinCompetitionRoom StartGame failed. ShutdownReason: {result.ShutdownReason}");
+                IsMultiplayerGame = false;
+                OnConnectionFailed?.Invoke($"Room not found or failed ({result.ShutdownReason}).");
+                await ShutdownRunner();
+                return;
+            }
+
+            OnConnectedToRoom?.Invoke();
+        }
+        finally
+        {
+            isStartingGame = false;
+        }
     }
 
     /// <summary>Disconnect from Photon and clean up.</summary>
@@ -242,13 +278,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private NetworkSceneInfo GetStartGameSceneInfo()
     {
-        var sceneInfo = new NetworkSceneInfo();
-        var activeScene = SceneManager.GetActiveScene();
-        if (activeScene.IsValid() && activeScene.buildIndex >= 0)
-        {
-            sceneInfo.AddSceneRef(SceneRef.FromIndex(activeScene.buildIndex), LoadSceneMode.Additive);
-        }
-        return sceneInfo;
+        return new NetworkSceneInfo();
     }
 
     private Fusion.Photon.Realtime.FusionAppSettings GetPhotonAppSettings()

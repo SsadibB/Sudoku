@@ -54,26 +54,7 @@ public class MultiplayerLobbyUI : MonoBehaviour
     private void Awake()
     {
         Instance = this;
-    }
 
-    private void OnDestroy()
-    {
-        if (Instance == this) Instance = null;
-    }
-
-    private void OnEnable()
-    {
-        RegisterListeners();
-    }
-
-    private void OnDisable()
-    {
-        UnregisterListeners();
-        StopSpinner();
-    }
-
-    private void RegisterListeners()
-    {
         if (internationalButton != null) internationalButton.onClick.AddListener(OnInternationalClicked);
         if (competitionButton != null) competitionButton.onClick.AddListener(OnCompetitionClicked);
         if (backToMainMenuButton != null) backToMainMenuButton.onClick.AddListener(OnBackToMainMenuClicked);
@@ -84,7 +65,15 @@ public class MultiplayerLobbyUI : MonoBehaviour
         if (intlDifficultyBackButton != null) intlDifficultyBackButton.onClick.AddListener(ShowModePanel);
 
         if (cancelSearchButton != null) cancelSearchButton.onClick.AddListener(OnCancelSearch);
+    }
 
+    private void OnDestroy()
+    {
+        if (Instance == this) Instance = null;
+    }
+
+    private void OnEnable()
+    {
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnMatchmakingTimeout += OnMatchmakingTimeout;
@@ -92,24 +81,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
         }
     }
 
-    private void UnregisterListeners()
+    private void OnDisable()
     {
-        if (internationalButton != null) internationalButton.onClick.RemoveListener(OnInternationalClicked);
-        if (competitionButton != null) competitionButton.onClick.RemoveListener(OnCompetitionClicked);
-        if (backToMainMenuButton != null) backToMainMenuButton.onClick.RemoveListener(OnBackToMainMenuClicked);
-
-        if (intlEasyButton != null) intlEasyButton.onClick.RemoveListener(() => OnIntlDifficultySelected(UIManager.Difficulty.Easy));
-        if (intlMediumButton != null) intlMediumButton.onClick.RemoveListener(() => OnIntlDifficultySelected(UIManager.Difficulty.Medium));
-        if (intlHardButton != null) intlHardButton.onClick.RemoveListener(() => OnIntlDifficultySelected(UIManager.Difficulty.Hard));
-        if (intlDifficultyBackButton != null) intlDifficultyBackButton.onClick.RemoveListener(ShowModePanel);
-
-        if (cancelSearchButton != null) cancelSearchButton.onClick.RemoveListener(OnCancelSearch);
-
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnMatchmakingTimeout -= OnMatchmakingTimeout;
             MultiplayerManager.Instance.OnConnectionFailed -= OnConnectionFailed;
         }
+        StopSpinner();
     }
 
     // ====================================================================

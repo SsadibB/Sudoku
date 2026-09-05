@@ -47,18 +47,7 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private UIManager.Difficulty selectedHostDifficulty;
 
-    private void OnEnable()
-    {
-        RegisterListeners();
-        ShowModeChooser();
-    }
-
-    private void OnDisable()
-    {
-        UnregisterListeners();
-    }
-
-    private void RegisterListeners()
+    private void Awake()
     {
         if (hostButton != null)         hostButton.onClick.AddListener(OnHostClicked);
         if (joinButton != null)          joinButton.onClick.AddListener(OnJoinClicked);
@@ -71,35 +60,36 @@ public class CompetitionRoomUI : MonoBehaviour
         if (cancelJoinButton != null)   cancelJoinButton.onClick.AddListener(OnCancelJoinClicked);
         if (joinConfirmButton != null)  joinConfirmButton.onClick.AddListener(OnJoinConfirmClicked);
         if (backButton != null)         backButton.onClick.AddListener(OnBackClicked);
+    }
 
+    private void OnEnable()
+    {
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnRoomCodeGenerated += OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    += OnOpponentJoined;
             MultiplayerManager.Instance.OnConnectionFailed  += OnConnectionFailed;
         }
+        SetButtonsInteractable(true);
+        ShowModeChooser();
     }
 
-    private void UnregisterListeners()
+    private void OnDisable()
     {
-        if (hostButton != null)         hostButton.onClick.RemoveListener(OnHostClicked);
-        if (joinButton != null)          joinButton.onClick.RemoveListener(OnJoinClicked);
-
-        if (hostEasyButton != null)     hostEasyButton.onClick.RemoveListener(() => OnHostDifficultySelected(UIManager.Difficulty.Easy));
-        if (hostMediumButton != null)   hostMediumButton.onClick.RemoveListener(() => OnHostDifficultySelected(UIManager.Difficulty.Medium));
-        if (hostHardButton != null)     hostHardButton.onClick.RemoveListener(() => OnHostDifficultySelected(UIManager.Difficulty.Hard));
-
-        if (cancelHostButton != null)   cancelHostButton.onClick.RemoveListener(OnCancelHostClicked);
-        if (cancelJoinButton != null)   cancelJoinButton.onClick.RemoveListener(OnCancelJoinClicked);
-        if (joinConfirmButton != null)  joinConfirmButton.onClick.RemoveListener(OnJoinConfirmClicked);
-        if (backButton != null)         backButton.onClick.RemoveListener(OnBackClicked);
-
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnRoomCodeGenerated -= OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    -= OnOpponentJoined;
             MultiplayerManager.Instance.OnConnectionFailed  -= OnConnectionFailed;
         }
+    }
+
+    private void SetButtonsInteractable(bool interactable)
+    {
+        if (hostEasyButton != null)    hostEasyButton.interactable = interactable;
+        if (hostMediumButton != null)  hostMediumButton.interactable = interactable;
+        if (hostHardButton != null)    hostHardButton.interactable = interactable;
+        if (joinConfirmButton != null) joinConfirmButton.interactable = interactable;
     }
 
     // ---- Panel open / close ----
@@ -149,6 +139,7 @@ public class CompetitionRoomUI : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX(UIManager.GetDifficultyButtonSfxId(difficulty));
         selectedHostDifficulty = difficulty;
+        SetButtonsInteractable(false);
         SetGroupActive(hostDifficultyGroup, false);
         SetGroupActive(hostWaitGroup, true);
 
@@ -226,6 +217,7 @@ public class CompetitionRoomUI : MonoBehaviour
     private void OnConnectionFailed(string reason)
     {
         Debug.LogError($"[CompetitionRoomUI] Connection failed: {reason}");
+        SetButtonsInteractable(true);
         if (hostStatusText != null) hostStatusText.text = $"Failed: {reason}";
         if (joinStatusText != null) joinStatusText.text = $"Could not join: {reason}";
         if (joinConfirmButton != null) joinConfirmButton.interactable = true;
