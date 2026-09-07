@@ -46,7 +46,13 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public bool IsInSession => Runner != null && Runner.IsRunning;
     public bool IsMultiplayerGame { get; private set; }
     public UIManager.Difficulty MatchDifficulty { get; private set; }
+    public int MatchLevel { get; private set; } = 1;
     public bool IsHost { get; private set; }
+
+    public void SetMatchLevel(int level)
+    {
+        if (level > 0) MatchLevel = level;
+    }
 
     public string LocalPlayerName { get; private set; } = "Player";
 
@@ -119,6 +125,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         {
             RefreshLocalPlayerName();
             MatchDifficulty = difficulty;
+            MatchLevel = UnityEngine.Random.Range(1, 500);
             IsHost = false;
             IsMultiplayerGame = true;
             waitingForOpponent = true;
@@ -177,6 +184,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             waitingForOpponent = true;
 
             string roomCode = GenerateRoomCode();
+            MatchLevel = (Math.Abs(roomCode.Trim().ToUpper().GetHashCode()) % 500) + 1;
 
             var runner = await CreateNetworkRunner();
 
@@ -224,6 +232,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         try
         {
             RefreshLocalPlayerName();
+            MatchLevel = (Math.Abs(roomCode.Trim().ToUpper().GetHashCode()) % 500) + 1;
             IsHost = false;
             IsMultiplayerGame = true;
 

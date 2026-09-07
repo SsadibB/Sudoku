@@ -118,6 +118,8 @@ public class SudokuGameManager : MonoBehaviour
     // ---- Multiplayer hooks (fired by the existing game logic) ----
     // OnCellCorrect(row, col, value) — fired each time a correct number locks in
     public event System.Action<int, int, int> OnCellCorrect;
+    // OnCellChanged(row, col, value, isCorrect) — fired whenever any cell changes (placed, wrong, erased, undo, hint)
+    public event System.Action<int, int, int, bool> OnCellChanged;
     // OnBoardComplete — fired when the board is fully solved (victory)
     public event System.Action OnBoardComplete;
 
@@ -198,14 +200,29 @@ public class SudokuGameManager : MonoBehaviour
             currentDifficulty = UIManager.Difficulty.Easy;
         }
 
-        // Which level to open: a level-select screen may have queued a
-        // specific level via LevelManager.SetSelectedLevel(); otherwise we
-        // continue at the first not-yet-completed level for this difficulty.
-        int level = LevelManager.Instance != null
-            ? LevelManager.Instance.ConsumeSelectedLevel(currentDifficulty)
-            : 1;
+        int level;
+        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
+        {
+            currentDifficulty = MultiplayerManager.Instance.MatchDifficulty;
+            level = MultiplayerManager.Instance.MatchLevel;
+        }
+        else
+        {
+            level = LevelManager.Instance != null
+                ? LevelManager.Instance.ConsumeSelectedLevel(currentDifficulty)
+                : 1;
+        }
 
         StartNewGame(currentDifficulty, level);
+    }
+
+    /// <summary>
+    /// Starts a synchronized multiplayer puzzle game. Called by MultiplayerGameController
+    /// once the shared difficulty and level are established.
+    /// </summary>
+    public void StartMultiplayerGame(UIManager.Difficulty difficulty, int level)
+    {
+        StartNewGame(difficulty, level);
     }
 
     private void Update()
@@ -336,7 +353,17 @@ public class SudokuGameManager : MonoBehaviour
 
         (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty, currentLevel);
 
-        if (levelHeaderText != null) levelHeaderText.text = $"Level {currentLevel}";
+        if (levelHeaderText != null)
+        {
+            if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
+            {
+                levelHeaderText.text = currentDifficulty.ToString();
+            }
+            else
+            {
+                levelHeaderText.text = $"Level {currentLevel}";
+            }
+        }
 
         if (gridLayout != null)
         {
@@ -440,6 +467,7 @@ public class SudokuGameManager : MonoBehaviour
 
             // ---- Multiplayer hook ----
             OnCellCorrect?.Invoke(row, col, number);
+            OnCellChanged?.Invoke(row, col, number, true);
 
             UpdateCompletedNumbers();
             CheckWinCondition();
@@ -452,6 +480,9 @@ public class SudokuGameManager : MonoBehaviour
             undoStack.Push(new CellMove(row, col, selected.GetNumber(), selected.IsFixed, selected.IsCorrect));
             selected.SetUserNumber(number, false);
             selected.GlowNumber();
+
+            // ---- Multiplayer hook for live cell change ----
+            OnCellChanged?.Invoke(row, col, number, false);
 
             // Wrong number entry -> Deduct half heart!
             if (heartManager != null)
@@ -646,6 +677,7 @@ public class SudokuGameManager : MonoBehaviour
             SoundManager.Instance?.PlaySFX("Erase");
             undoStack.Push(new CellMove(selected.Row, selected.Col, selected.GetNumber(), selected.IsFixed, selected.IsCorrect));
             selected.ClearCell();
+            OnCellChanged?.Invoke(selected.Row, selected.Col, 0, false);
         }
     }
 
@@ -662,10 +694,12 @@ public class SudokuGameManager : MonoBehaviour
         if (lastMove.PreviousNumber == 0)
         {
             cell.ClearCell();
+            OnCellChanged?.Invoke(cell.Row, cell.Col, 0, false);
         }
         else
         {
             cell.SetUserNumber(lastMove.PreviousNumber, lastMove.PreviousWasCorrect);
+            OnCellChanged?.Invoke(cell.Row, cell.Col, lastMove.PreviousNumber, lastMove.PreviousWasCorrect);
         }
     }
 
@@ -680,6 +714,7 @@ public class SudokuGameManager : MonoBehaviour
 
         int correctVal = solutionGrid[selected.Row, selected.Col];
         selected.SetFixedNumber(correctVal);
+        OnCellChanged?.Invoke(selected.Row, selected.Col, correctVal, true);
 
         // A hint doesn't pay the "correct number" score bonus (the player
         // didn't solve it themselves), but it can still complete a row/

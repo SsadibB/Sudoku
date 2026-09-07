@@ -5,8 +5,9 @@ using Fusion;
 
 /// <summary>
 /// Sits in GameScene. If a Fusion session is active, this script bridges
-/// SudokuGameManager events → NetworkSudokuPlayer RPCs and watches for
-/// winner conditions. In single-player sessions it does nothing.
+/// SudokuGameManager events → NetworkSudokuPlayer RPCs/properties, synchronizes
+/// identical puzzle board generation across players, and watches for winner conditions.
+/// In single-player sessions it disables itself and hides the board button.
 /// </summary>
 public class MultiplayerGameController : MonoBehaviour
 {
@@ -15,7 +16,7 @@ public class MultiplayerGameController : MonoBehaviour
     [SerializeField] private OpponentBoardPanel opponentBoardPanel;
     [SerializeField] private Button boardButton;
 
-    // Set by SudokuGameManager modifications — injected at game start
+    // Injected at game start
     private SudokuGameManager gameManager;
 
     private bool gameStarted;
@@ -27,10 +28,21 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void Start()
     {
-        if (boardButton != null)
-            boardButton.onClick.AddListener(ToggleOpponentBoard);
+        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
 
-        if (MultiplayerManager.Instance == null || !MultiplayerManager.Instance.IsInSession)
+        if (boardButton != null)
+        {
+            boardButton.gameObject.SetActive(isMultiplayer);
+            if (isMultiplayer)
+                boardButton.onClick.AddListener(ToggleOpponentBoard);
+        }
+
+        if (opponentBoardPanel != null && boardButton != null)
+        {
+            opponentBoardPanel.SetBoardButton(boardButton.GetComponent<RectTransform>());
+        }
+
+        if (!isMultiplayer)
         {
             // Single-player — disable self
             enabled = false;
@@ -46,6 +58,7 @@ public class MultiplayerGameController : MonoBehaviour
 
         // Listen for SudokuGameManager multiplayer events
         gameManager.OnCellCorrect += HandleCellCorrect;
+        gameManager.OnCellChanged += HandleCellChanged;
         gameManager.OnBoardComplete += HandleBoardComplete;
 
         // Listen for opponent leaving
@@ -54,10 +67,7 @@ public class MultiplayerGameController : MonoBehaviour
         gameStartTime = Time.time;
         gameStarted = true;
 
-        // Spawn the local NetworkSudokuPlayer — Fusion Shared mode auto-spawns
-        // per player, but we need to ensure it has the puzzle snapshot once
-        // SudokuGameManager finishes generating the puzzle.
-        StartCoroutine(InitNetworkPlayerAfterFrame());
+        StartCoroutine(InitNetworkPlayerAndBoard());
     }
 
     private void OnDestroy()
@@ -65,6 +75,7 @@ public class MultiplayerGameController : MonoBehaviour
         if (gameManager != null)
         {
             gameManager.OnCellCorrect -= HandleCellCorrect;
+            gameManager.OnCellChanged -= HandleCellChanged;
             gameManager.OnBoardComplete -= HandleBoardComplete;
         }
 
@@ -72,29 +83,95 @@ public class MultiplayerGameController : MonoBehaviour
             MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentLeft;
     }
 
-    private IEnumerator InitNetworkPlayerAfterFrame()
+    private void Update()
     {
-        // Wait until NetworkSudokuPlayer.Local is spawned by Fusion
+        if (!gameStarted) return;
+
+        // Watch if remote opponent finished the board first
+        var remote = NetworkSudokuPlayer.Remote;
+        if (remote != null && remote.IsFinished)
+        {
+            gameStarted = false;
+            float elapsed = Time.time - gameStartTime;
+            ShowResult(isWinner: false, elapsed);
+        }
+    }
+
+    private IEnumerator InitNetworkPlayerAndBoard()
+    {
+        var mp = MultiplayerManager.Instance;
+        var runner = mp != null ? mp.Runner : null;
+        bool isMaster = runner != null && runner.IsSharedModeMasterClient;
+        int matchLevel = mp != null ? mp.MatchLevel : 1;
+        var diff = mp != null ? mp.MatchDifficulty : UIManager.Difficulty.Easy;
+
+        // Spawn NetworkSudokuPlayer for the local player if not already spawned
+        if (NetworkSudokuPlayer.Local == null && networkPlayerPrefab != null && runner != null && runner.IsRunning)
+        {
+            try
+            {
+                runner.SpawnAsync(networkPlayerPrefab, Vector3.zero, Quaternion.identity, runner.LocalPlayer);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning($"[MultiplayerGameController] Spawn local player error: {ex.Message}");
+            }
+        }
+
+        // Wait briefly for NetworkSudokuPlayer.Local
         float waited = 0f;
-        while (NetworkSudokuPlayer.Local == null && waited < 5f)
+        while (NetworkSudokuPlayer.Local == null && waited < 3f)
         {
             yield return null;
             waited += Time.deltaTime;
         }
 
-        if (NetworkSudokuPlayer.Local == null)
+        if (!isMaster)
         {
-            Debug.LogWarning("MultiplayerGameController: Local NetworkSudokuPlayer never spawned.");
-            yield break;
+            // Guest player: wait briefly for remote master player's SharedPuzzleLevel
+            float waitRemote = 0f;
+            while ((NetworkSudokuPlayer.Remote == null || NetworkSudokuPlayer.Remote.SharedPuzzleLevel <= 0) && waitRemote < 2f)
+            {
+                yield return null;
+                waitRemote += Time.deltaTime;
+            }
+
+            if (NetworkSudokuPlayer.Remote != null && NetworkSudokuPlayer.Remote.SharedPuzzleLevel > 0)
+            {
+                matchLevel = NetworkSudokuPlayer.Remote.SharedPuzzleLevel;
+                mp?.SetMatchLevel(matchLevel);
+            }
+        }
+        else
+        {
+            if (NetworkSudokuPlayer.Local != null)
+            {
+                NetworkSudokuPlayer.Local.SharedPuzzleLevel = matchLevel;
+            }
         }
 
-        // Push the initial puzzle board into the network snapshot
-        var puzzle = gameManager.GetCurrentPuzzle();
-        NetworkSudokuPlayer.Local.InitBoardSnapshot(puzzle);
+        // Ensure board matches the synchronized level
+        if (gameManager.CurrentLevel != matchLevel)
+        {
+            gameManager.StartMultiplayerGame(diff, matchLevel);
+            yield return null;
+        }
 
-        // Register opponent board panel
+        // Push the initial puzzle board into the local network snapshot
+        if (NetworkSudokuPlayer.Local != null)
+        {
+            var puzzle = gameManager.GetCurrentPuzzle();
+            if (puzzle != null)
+                NetworkSudokuPlayer.Local.InitBoardSnapshot(puzzle);
+        }
+
+        // Register and initialize opponent board panel
         if (opponentBoardPanel != null)
+        {
+            if (boardButton != null)
+                opponentBoardPanel.SetBoardButton(boardButton.GetComponent<RectTransform>());
             opponentBoardPanel.Initialize();
+        }
     }
 
     // ---- Event handlers ----
@@ -105,6 +182,12 @@ public class MultiplayerGameController : MonoBehaviour
         NetworkSudokuPlayer.Local?.RecordCorrectCell(row, col, (byte)value);
     }
 
+    private void HandleCellChanged(int row, int col, int value, bool isCorrect)
+    {
+        if (!gameStarted) return;
+        NetworkSudokuPlayer.Local?.RecordCellChange(row, col, (byte)value, isCorrect);
+    }
+
     private void HandleBoardComplete()
     {
         if (!gameStarted) return;
@@ -113,8 +196,7 @@ public class MultiplayerGameController : MonoBehaviour
         float elapsed = Time.time - gameStartTime;
         NetworkSudokuPlayer.Local?.MarkFinished(elapsed);
 
-        // Determine winner: whoever is flagged Finished first wins.
-        // Since we just set Local.IsFinished, check if Remote is already done.
+        // Determine winner: whoever flags Finished first wins.
         bool iWon = NetworkSudokuPlayer.Remote == null || !NetworkSudokuPlayer.Remote.IsFinished;
         ShowResult(iWon, elapsed);
     }

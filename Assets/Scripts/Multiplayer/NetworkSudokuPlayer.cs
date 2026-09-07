@@ -23,6 +23,9 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     [Networked] public NetworkBool IsFinished { get; set; }
     [Networked] public float FinishTime { get; set; }
 
+    // Synchronized puzzle level for multiplayer (set by Master Client)
+    [Networked] public int SharedPuzzleLevel { get; set; }
+
     // Player name (max 32 chars)
     [Networked] public NetworkString<_32> PlayerName { get; set; }
 
@@ -41,6 +44,12 @@ public class NetworkSudokuPlayer : NetworkBehaviour
                 ? MultiplayerManager.Instance.LocalPlayerName
                 : "Player";
             PlayerName = new NetworkString<_32>(name);
+
+            // If Master Client, publish the match level
+            if (Runner.IsSharedModeMasterClient && MultiplayerManager.Instance != null)
+            {
+                SharedPuzzleLevel = MultiplayerManager.Instance.MatchLevel;
+            }
         }
         else
         {
@@ -59,18 +68,48 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     /// <summary>Record a correct cell placement (state-authority only).</summary>
     public void RecordCorrectCell(int row, int col, byte value)
     {
+        RecordCellChange(row, col, value, true);
+    }
+
+    /// <summary>
+    /// Record any cell change: value (0=cleared, 1-9=number) and whether it's correct.
+    /// Encodes value in bits 0-3, and bit 4 (0x10) indicates an incorrect user attempt.
+    /// </summary>
+    public void RecordCellChange(int row, int col, byte value, bool isCorrect)
+    {
         if (!HasStateAuthority) return;
-        CompletedCells++;
-        BoardSnapshot.Set(row * 9 + col, value);
+
+        byte encoded = (byte)(value & 0x0F);
+        if (value > 0 && !isCorrect)
+        {
+            encoded |= 0x10; // Bit 4 set: wrong user guess
+        }
+        BoardSnapshot.Set(row * 9 + col, encoded);
+
+        // Recalculate completed correct cells
+        int count = 0;
+        for (int i = 0; i < 81; i++)
+        {
+            byte b = BoardSnapshot[i];
+            if ((b & 0x0F) > 0 && (b & 0x10) == 0)
+                count++;
+        }
+        CompletedCells = count;
     }
 
     /// <summary>Sync the initial puzzle fixed cells into the snapshot.</summary>
     public void InitBoardSnapshot(int[,] puzzle)
     {
         if (!HasStateAuthority) return;
+        int count = 0;
         for (int r = 0; r < 9; r++)
             for (int c = 0; c < 9; c++)
-                BoardSnapshot.Set(r * 9 + c, (byte)puzzle[r, c]);
+            {
+                byte val = (byte)puzzle[r, c];
+                BoardSnapshot.Set(r * 9 + c, val);
+                if (val > 0) count++;
+            }
+        CompletedCells = count;
     }
 
     /// <summary>Mark this player as finished.</summary>

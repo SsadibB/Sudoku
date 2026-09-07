@@ -1450,7 +1450,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 1, g: 1, b: 1, a: 1}
+  m_Color: {r: 0.06, g: 0.08, b: 0.14, a: 0.98}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
@@ -1547,7 +1547,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 1, y: 1}
   m_AnchorMax: {x: 1, y: 1}
-  m_AnchoredPosition: {x: -0.000030517578, y: 0}
+  m_AnchoredPosition: {x: -0.000061035156, y: 0}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 1, y: 1}
 --- !u!114 &277531716
@@ -3241,7 +3241,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0}
   m_AnchorMax: {x: 0.5, y: 0}
-  m_AnchoredPosition: {x: 0, y: 68.3}
+  m_AnchoredPosition: {x: 0, y: 68.30005}
   m_SizeDelta: {x: 400, y: 80}
   m_Pivot: {x: 0.5, y: 0}
 --- !u!114 &540161647
@@ -3299,9 +3299,9 @@ MonoBehaviour:
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
   m_fontSizeMax: 72
-  m_fontStyle: 0
-  m_HorizontalAlignment: 1
-  m_VerticalAlignment: 256
+  m_fontStyle: 1
+  m_HorizontalAlignment: 2
+  m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1
@@ -5896,7 +5896,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &967891889
 RectTransform:
   m_ObjectHideFlags: 0
@@ -5980,15 +5980,32 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::OpponentBoardPanel
   panelRoot: {fileID: 967891888}
+  panelCG: {fileID: 967891892}
+  boardButtonTransform: {fileID: 1777487887}
   gridParent: {fileID: 283092025}
   opponentNameText: {fileID: 1387941322}
   opponentProgressText: {fileID: 540161647}
   closeButton: {fileID: 277531716}
-  fixedCellColor: {r: 0.88, g: 0.85, b: 0.78, a: 1}
-  emptyCellColor: {r: 1, g: 1, b: 1, a: 0.4}
-  completedCellColor: {r: 0.55, g: 0.85, b: 0.55, a: 0.9}
-  cellSize: 28
-  animDuration: 0.25
+  bigGridCellSize: {x: 287, y: 345}
+  bigGridSpacing: {x: 20, y: 25}
+  boxBorderColor: {r: 0.35, g: 0.2, b: 0.08, a: 1}
+  smallGridCellSize: {x: 92.8, y: 112}
+  smallGridSpacing: {x: 3.6, y: 4}
+  cellFontSize: 70
+  panelBgColor: {r: 0.06, g: 0.08, b: 0.14, a: 0.98}
+  gridBgColor: {r: 0.03, g: 0.04, b: 0.08, a: 0.9}
+  headerNameColor: {r: 0.96, g: 0.78, b: 0.35, a: 1}
+  progressTextColor: {r: 0.25, g: 0.88, b: 0.7, a: 1}
+  emptyCellColor: {r: 0.12, g: 0.16, b: 0.24, a: 1}
+  fixedCellColor: {r: 0.24, g: 0.22, b: 0.17, a: 1}
+  fixedTextColor: {r: 0.92, g: 0.78, b: 0.58, a: 1}
+  completedCellColor: {r: 0.08, g: 0.44, b: 0.28, a: 1}
+  completedTextColor: {r: 0.6, g: 0.96, b: 0.78, a: 1}
+  wrongCellColor: {r: 0.48, g: 0.14, b: 0.18, a: 1}
+  wrongTextColor: {r: 0.98, g: 0.72, b: 0.75, a: 1}
+  closeButtonColor: {r: 0.65, g: 0.18, b: 0.22, a: 1}
+  closeButtonTextColor: {r: 0.96, g: 0.82, b: 0.55, a: 1}
+  animDuration: 0.35
 --- !u!1 &971351349
 GameObject:
   m_ObjectHideFlags: 0
@@ -8339,15 +8356,15 @@ MonoBehaviour:
   m_faceColor:
     serializedVersion: 2
     rgba: 4294967295
-  m_fontSize: 25
-  m_fontSizeBase: 25
+  m_fontSize: 30
+  m_fontSizeBase: 30
   m_fontWeight: 400
   m_enableAutoSizing: 0
   m_fontSizeMin: 18
   m_fontSizeMax: 72
   m_fontStyle: 0
-  m_HorizontalAlignment: 1
-  m_VerticalAlignment: 256
+  m_HorizontalAlignment: 2
+  m_VerticalAlignment: 512
   m_textAlignment: 65535
   m_characterSpacing: 0
   m_characterHorizontalScale: 1
@@ -11092,14 +11109,14 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: UnityEngine.UI::UnityEngine.UI.Image
   m_Material: {fileID: 0}
-  m_Color: {r: 0.23, g: 0.51, b: 0.96, a: 1}
+  m_Color: {r: 0.6367924, g: 0.77543616, b: 1, a: 1}
   m_RaycastTarget: 1
   m_RaycastPadding: {x: 0, y: 0, z: 0, w: 0}
   m_Maskable: 1
   m_OnCullStateChanged:
     m_PersistentCalls:
       m_Calls: []
-  m_Sprite: {fileID: 0}
+  m_Sprite: {fileID: 21300000, guid: cc9af097554bf284ba73408ed5e594a9, type: 3}
   m_Type: 0
   m_PreserveAspect: 0
   m_FillCenter: 1
@@ -11134,7 +11151,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0.5, y: 0.5}
   m_AnchorMax: {x: 0.5, y: 0.5}
-  m_AnchoredPosition: {x: -0.1000061, y: -880.2992}
+  m_AnchoredPosition: {x: 20.9, y: -93.7}
   m_SizeDelta: {x: 100, y: 100}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &1778114149
@@ -12336,7 +12353,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &1982083035
 RectTransform:
   m_ObjectHideFlags: 0
