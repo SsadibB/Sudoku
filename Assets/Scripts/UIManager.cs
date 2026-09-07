@@ -399,7 +399,15 @@ public class UIManager : MonoBehaviour
 
         HideDifficultyPanel(() =>
         {
-            if (multiplayerLobbyUI != null) multiplayerLobbyUI.Show();
+            if (multiplayerLobbyUI == null)
+                multiplayerLobbyUI = MultiplayerLobbyUI.Instance;
+            if (multiplayerLobbyUI == null)
+                multiplayerLobbyUI = FindAnyObjectByType<MultiplayerLobbyUI>(FindObjectsInactive.Include);
+
+            if (multiplayerLobbyUI != null)
+                multiplayerLobbyUI.Show();
+            else
+                Debug.LogError("[UIManager] MultiplayerLobbyUI could not be found!");
         });
     }
 

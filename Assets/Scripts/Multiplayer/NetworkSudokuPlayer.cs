@@ -22,6 +22,9 @@ public class NetworkSudokuPlayer : NetworkBehaviour
 
     [Networked] public NetworkBool IsFinished { get; set; }
     [Networked] public float FinishTime { get; set; }
+    [Networked] public NetworkBool HasForfeited { get; set; }
+
+    public static event System.Action<NetworkSudokuPlayer> OnPlayerForfeited;
 
     // Synchronized puzzle level for multiplayer (set by Master Client)
     [Networked] public int SharedPuzzleLevel { get; set; }
@@ -118,5 +121,20 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         if (!HasStateAuthority) return;
         IsFinished = true;
         FinishTime = finishTime;
+    }
+
+    /// <summary>Mark this player as having forfeited the match.</summary>
+    public void Forfeit()
+    {
+        if (!HasStateAuthority) return;
+        HasForfeited = true;
+        RpcForfeit();
+    }
+
+    [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
+    public void RpcForfeit()
+    {
+        HasForfeited = true;
+        OnPlayerForfeited?.Invoke(this);
     }
 }

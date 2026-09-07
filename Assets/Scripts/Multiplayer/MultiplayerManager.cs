@@ -74,6 +74,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     // calls run.
     private void Awake()
     {
+        // Detach any children (such as MultiplayerLobbyUI) so they remain in their scene
+        // and are never pulled into DontDestroyOnLoad or destroyed with a duplicate manager.
+        transform.DetachChildren();
+
         if (_instance != null && _instance != this)
         {
             Destroy(gameObject);
@@ -273,6 +277,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         IsMultiplayerGame = false;
         waitingForOpponent = false;
+        isStartingGame = false;
         if (matchmakingTimeoutCoroutine != null)
         {
             StopCoroutine(matchmakingTimeoutCoroutine);

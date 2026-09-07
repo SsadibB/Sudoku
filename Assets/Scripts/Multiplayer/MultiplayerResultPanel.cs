@@ -74,7 +74,9 @@ public class MultiplayerResultPanel : MonoBehaviour
 
         if (opponentTimeText != null)
         {
-            if (remote != null && remote.IsFinished)
+            if (remote != null && remote.HasForfeited)
+                opponentTimeText.text = "Forfeited";
+            else if (remote != null && remote.IsFinished)
                 opponentTimeText.text = $"Time: {FormatTime(remote.FinishTime)}";
             else
                 opponentTimeText.text = remote != null && remote.Object.IsValid

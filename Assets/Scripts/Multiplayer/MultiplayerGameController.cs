@@ -61,8 +61,9 @@ public class MultiplayerGameController : MonoBehaviour
         gameManager.OnCellChanged += HandleCellChanged;
         gameManager.OnBoardComplete += HandleBoardComplete;
 
-        // Listen for opponent leaving
+        // Listen for opponent leaving or forfeiting
         MultiplayerManager.Instance.OnOpponentLeft += HandleOpponentLeft;
+        NetworkSudokuPlayer.OnPlayerForfeited += HandlePlayerForfeited;
 
         gameStartTime = Time.time;
         gameStarted = true;
@@ -81,19 +82,30 @@ public class MultiplayerGameController : MonoBehaviour
 
         if (MultiplayerManager.Instance != null)
             MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentLeft;
+
+        NetworkSudokuPlayer.OnPlayerForfeited -= HandlePlayerForfeited;
     }
 
     private void Update()
     {
         if (!gameStarted) return;
 
-        // Watch if remote opponent finished the board first
+        // Watch if remote opponent finished the board or forfeited
         var remote = NetworkSudokuPlayer.Remote;
-        if (remote != null && remote.IsFinished)
+        if (remote != null)
         {
-            gameStarted = false;
-            float elapsed = Time.time - gameStartTime;
-            ShowResult(isWinner: false, elapsed);
+            if (remote.HasForfeited)
+            {
+                gameStarted = false;
+                float elapsed = Time.time - gameStartTime;
+                ShowResult(isWinner: true, elapsed);
+            }
+            else if (remote.IsFinished)
+            {
+                gameStarted = false;
+                float elapsed = Time.time - gameStartTime;
+                ShowResult(isWinner: false, elapsed);
+            }
         }
     }
 
@@ -209,6 +221,17 @@ public class MultiplayerGameController : MonoBehaviour
         // Opponent disconnected — local player wins by default
         float elapsed = Time.time - gameStartTime;
         ShowResult(isWinner: true, elapsed);
+    }
+
+    private void HandlePlayerForfeited(NetworkSudokuPlayer player)
+    {
+        if (!gameStarted) return;
+        if (player != NetworkSudokuPlayer.Local)
+        {
+            gameStarted = false;
+            float elapsed = Time.time - gameStartTime;
+            ShowResult(isWinner: true, elapsed);
+        }
     }
 
     private void ShowResult(bool isWinner, float elapsed)

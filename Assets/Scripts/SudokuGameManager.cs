@@ -79,10 +79,11 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private Button mediumPosterBtn;
     [SerializeField] private Button hardPosterBtn;
 
-    [Header("Restart Confirmation Panel (Header Restart Button Only)")]
+    [Header("Confirmation Panel")]
     [SerializeField] private GameObject restartConfirmationPanel;
     [SerializeField] private Button restartConfirmYesButton;
     [SerializeField] private Button restartConfirmNoButton;
+    [SerializeField] private TMP_Text confirmationMessageText;
 
     [Header("Random Ambient SFX (Gameplay)")]
     [Tooltip("While a game is active, 'RandomSFX' plays repeatedly at a random interval between these two values (seconds).")]
@@ -941,30 +942,56 @@ public class SudokuGameManager : MonoBehaviour
         if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
     }
 
+    private enum ConfirmationAction
+    {
+        BackToMenu,
+        Restart
+    }
+    private ConfirmationAction pendingConfirmationAction = ConfirmationAction.BackToMenu;
+
+    private void SetConfirmationMessage(string message)
+    {
+        if (confirmationMessageText == null && restartConfirmationPanel != null)
+        {
+            confirmationMessageText = restartConfirmationPanel.GetComponentInChildren<TMP_Text>();
+        }
+        if (confirmationMessageText != null)
+        {
+            confirmationMessageText.text = message;
+        }
+    }
+
     private void OnRestartHeaderClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
 
         if (restartConfirmationPanel != null)
         {
+            pendingConfirmationAction = ConfirmationAction.Restart;
+            SetConfirmationMessage("Do you want to restart the Game?");
             restartConfirmationPanel.SetActive(true);
         }
         else
         {
-            // No confirmation panel assigned, fall back to old behavior.
-            PromptDifficultySelection();
+            ExecuteRestart();
         }
     }
 
     private void OnRestartConfirmYesClicked()
     {
-
         SoundManager.Instance?.PlaySFX("Button");
 
         if (restartConfirmationPanel != null)
             restartConfirmationPanel.SetActive(false);
 
-        PromptDifficultySelection();
+        if (pendingConfirmationAction == ConfirmationAction.BackToMenu)
+        {
+            ExecuteBackToMenu();
+        }
+        else
+        {
+            ExecuteRestart();
+        }
     }
 
     private void OnRestartConfirmNoClicked()
@@ -973,6 +1000,26 @@ public class SudokuGameManager : MonoBehaviour
 
         if (restartConfirmationPanel != null)
             restartConfirmationPanel.SetActive(false);
+    }
+
+    private void ExecuteBackToMenu()
+    {
+        StopRandomSfxLoop();
+
+        // If in multiplayer, notify opponent of forfeit and disconnect runner
+        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession)
+        {
+            NetworkSudokuPlayer.Local?.Forfeit();
+            MultiplayerManager.Instance.Disconnect();
+        }
+
+        PromptDifficultySelection();
+    }
+
+    private void ExecuteRestart()
+    {
+        StopRandomSfxLoop();
+        StartNewGame(currentDifficulty);
     }
 
     private void PromptDifficultySelection()
@@ -1033,8 +1080,18 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnBackClicked()
     {
-        StopRandomSfxLoop();
-        PromptDifficultySelection();
+        SoundManager.Instance?.PlaySFX("Button");
+
+        if (restartConfirmationPanel != null)
+        {
+            pendingConfirmationAction = ConfirmationAction.BackToMenu;
+            SetConfirmationMessage("You want to go back to menu?");
+            restartConfirmationPanel.SetActive(true);
+        }
+        else
+        {
+            ExecuteBackToMenu();
+        }
     }
 
     // ====================================================================
