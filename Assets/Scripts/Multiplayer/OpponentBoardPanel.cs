@@ -25,6 +25,14 @@ public class OpponentBoardPanel : MonoBehaviour
     [Header("Header")]
     [SerializeField] private TMP_Text opponentNameText;
     [SerializeField] private TMP_Text opponentProgressText;
+    [SerializeField] private TMP_Text opponentScoreText;
+    [SerializeField] private TMP_Text opponentLivesText;
+
+    [Header("Opponent Lives Visuals")]
+    [SerializeField] private Image[] opponentHeartSlots;
+    [SerializeField] private Sprite fullHeartSprite;
+    [SerializeField] private Sprite halfHeartSprite;
+    [SerializeField] private Sprite emptyHeartSprite;
 
     [Header("Close Button")]
     [SerializeField] private Button closeButton;
@@ -38,18 +46,20 @@ public class OpponentBoardPanel : MonoBehaviour
     [SerializeField] private float cellFontSize = 70f;
 
     [Header("Non-White Aesthetic Color Palette")]
-    [SerializeField] private Color panelBgColor         = new Color(0.06f, 0.08f, 0.14f, 0.98f); // Obsidian Midnight Navy
-    [SerializeField] private Color gridBgColor          = new Color(0.03f, 0.04f, 0.08f, 0.90f); // Deep Cavity
-    [SerializeField] private Color headerNameColor      = new Color(0.96f, 0.78f, 0.35f, 1f);    // Luminous Amber Gold
-    [SerializeField] private Color progressTextColor    = new Color(0.25f, 0.88f, 0.70f, 1f);    // Electric Cyan Mint
-    [SerializeField] private Color emptyCellColor       = new Color(0.12f, 0.16f, 0.24f, 1f);    // Deep Twilight Slate
-    [SerializeField] private Color fixedCellColor       = new Color(0.24f, 0.22f, 0.17f, 1f);    // Dark Warm Bronze
-    [SerializeField] private Color fixedTextColor       = new Color(0.92f, 0.78f, 0.58f, 1f);    // Light Amber Sand
-    [SerializeField] private Color completedCellColor   = new Color(0.08f, 0.44f, 0.28f, 1f);    // Vibrant Emerald Jade
-    [SerializeField] private Color completedTextColor   = new Color(0.60f, 0.96f, 0.78f, 1f);    // Bright Mint Aqua
-    [SerializeField] private Color wrongCellColor       = new Color(0.48f, 0.14f, 0.18f, 1f);    // Deep Ruby Crimson
-    [SerializeField] private Color wrongTextColor       = new Color(0.98f, 0.72f, 0.75f, 1f);    // Light Rose Peach
-    [SerializeField] private Color closeButtonColor     = new Color(0.65f, 0.18f, 0.22f, 1f);    // Garnet Crimson
+    [SerializeField] private Color panelBgColor = new Color(0.06f, 0.08f, 0.14f, 0.98f); // Obsidian Midnight Navy
+    [SerializeField] private Color gridBgColor = new Color(0.03f, 0.04f, 0.08f, 0.90f); // Deep Cavity
+    [SerializeField] private Color headerNameColor = new Color(0.96f, 0.78f, 0.35f, 1f);    // Luminous Amber Gold
+    [SerializeField] private Color progressTextColor = new Color(0.25f, 0.88f, 0.70f, 1f);    // Electric Cyan Mint
+    [SerializeField] private Color scoreTextColor = new Color(0.96f, 0.78f, 0.35f, 1f);    // Luminous Amber Gold
+    [SerializeField] private Color livesTextColor = new Color(0.95f, 0.35f, 0.42f, 1f);    // Warm Coral Red
+    [SerializeField] private Color emptyCellColor = new Color(0.12f, 0.16f, 0.24f, 1f);    // Deep Twilight Slate
+    [SerializeField] private Color fixedCellColor = new Color(0.24f, 0.22f, 0.17f, 1f);    // Dark Warm Bronze
+    [SerializeField] private Color fixedTextColor = new Color(0.92f, 0.78f, 0.58f, 1f);    // Light Amber Sand
+    [SerializeField] private Color completedCellColor = new Color(0.08f, 0.44f, 0.28f, 1f);    // Vibrant Emerald Jade
+    [SerializeField] private Color completedTextColor = new Color(0.60f, 0.96f, 0.78f, 1f);    // Bright Mint Aqua
+    [SerializeField] private Color wrongCellColor = new Color(0.48f, 0.14f, 0.18f, 1f);    // Deep Ruby Crimson
+    [SerializeField] private Color wrongTextColor = new Color(0.98f, 0.72f, 0.75f, 1f);    // Light Rose Peach
+    [SerializeField] private Color closeButtonColor = new Color(0.65f, 0.18f, 0.22f, 1f);    // Garnet Crimson
     [SerializeField] private Color closeButtonTextColor = new Color(0.96f, 0.82f, 0.55f, 1f);    // Warm Gold Icon
 
     [Header("Animation")]
@@ -121,6 +131,21 @@ public class OpponentBoardPanel : MonoBehaviour
     {
         if (isInitialized) return;
         isInitialized = true;
+
+        if (fullHeartSprite == null || halfHeartSprite == null || emptyHeartSprite == null)
+        {
+#if UNITY_2023_1_OR_NEWER
+            var hm = FindAnyObjectByType<HeartManager>();
+#else
+            var hm = FindObjectOfType<HeartManager>();
+#endif
+            if (hm != null)
+            {
+                if (fullHeartSprite == null) fullHeartSprite = hm.FullHeartSprite;
+                if (halfHeartSprite == null) halfHeartSprite = hm.HalfHeartSprite;
+                if (emptyHeartSprite == null) emptyHeartSprite = hm.EmptyHeartSprite;
+            }
+        }
 
         CaptureDefaultTransform();
         BuildMiniGrid();
@@ -240,6 +265,32 @@ public class OpponentBoardPanel : MonoBehaviour
         fadeTween?.Kill();
     }
 
+    private void UpdateHeartSlots(int halfHearts)
+    {
+        if (opponentHeartSlots == null || opponentHeartSlots.Length == 0) return;
+
+        for (int i = 0; i < opponentHeartSlots.Length; i++)
+        {
+            if (opponentHeartSlots[i] == null) continue;
+            int slotHalf = halfHearts - (i * 2);
+            if (slotHalf >= 2)
+            {
+                opponentHeartSlots[i].sprite = fullHeartSprite;
+                opponentHeartSlots[i].enabled = (fullHeartSprite != null);
+            }
+            else if (slotHalf == 1)
+            {
+                opponentHeartSlots[i].sprite = halfHeartSprite;
+                opponentHeartSlots[i].enabled = (halfHeartSprite != null);
+            }
+            else
+            {
+                opponentHeartSlots[i].sprite = emptyHeartSprite;
+                opponentHeartSlots[i].enabled = (emptyHeartSprite != null);
+            }
+        }
+    }
+
     // ---- Update ----
 
     private void Update()
@@ -269,6 +320,19 @@ public class OpponentBoardPanel : MonoBehaviour
                     : $"{remote.CompletedCells}/81";
                 opponentProgressText.color = progressTextColor;
             }
+
+            if (opponentScoreText != null)
+            {
+                opponentScoreText.text = $"Score: {remote.Score}";
+                opponentScoreText.color = scoreTextColor;
+            }
+
+            UpdateHeartSlots(remote.HalfHearts);
+
+            if (opponentLivesText != null && opponentLivesText.gameObject.activeSelf)
+            {
+                opponentLivesText.gameObject.SetActive(false);
+            }
         }
         else
         {
@@ -282,6 +346,19 @@ public class OpponentBoardPanel : MonoBehaviour
             {
                 opponentProgressText.text = "Waiting for Opponent...";
                 opponentProgressText.color = progressTextColor;
+            }
+
+            if (opponentScoreText != null)
+            {
+                opponentScoreText.text = "Score: 0";
+                opponentScoreText.color = scoreTextColor;
+            }
+
+            UpdateHeartSlots(6);
+
+            if (opponentLivesText != null && opponentLivesText.gameObject.activeSelf)
+            {
+                opponentLivesText.gameObject.SetActive(false);
             }
         }
 
@@ -323,35 +400,42 @@ public class OpponentBoardPanel : MonoBehaviour
                         num = puzzle[r, c];
                 }
 
-                // Update text
-                if (cellTexts[i] != null)
-                {
-                    cellTexts[i].text = num > 0 ? num.ToString() : "";
-                }
-
-                // Update colors (strictly non-white)
+                // Update colors (strictly non-white) and text.
+                // NOTE: Correctly completed non-fixed cells intentionally show NO number
+                // so the local player cannot read and copy the opponent's answer.
                 if (num == 0)
                 {
                     cellImages[i].color = emptyCellColor;
+                    if (cellTexts[i] != null)
+                        cellTexts[i].text = "";
                 }
                 else if (isFixed)
                 {
-                    cellImages[i].color = fixedCellColor;
+                    // Fixed/given clue cells: show number normally
                     if (cellTexts[i] != null)
+                    {
+                        cellTexts[i].text = num.ToString();
                         cellTexts[i].color = fixedTextColor;
+                    }
+                    cellImages[i].color = fixedCellColor;
                 }
                 else if (isWrong)
                 {
-                    cellImages[i].color = wrongCellColor;
+                    // Wrong guess: show the (wrong) number so the opponent sees their mistake
                     if (cellTexts[i] != null)
+                    {
+                        cellTexts[i].text = num.ToString();
                         cellTexts[i].color = wrongTextColor;
+                    }
+                    cellImages[i].color = wrongCellColor;
                 }
                 else
                 {
-                    // Opponent correctly completed cell
-                    cellImages[i].color = completedCellColor;
+                    // Correctly completed cell: show green color but NO number
+                    // to prevent the local player from copying the answer
                     if (cellTexts[i] != null)
-                        cellTexts[i].color = completedTextColor;
+                        cellTexts[i].text = "";
+                    cellImages[i].color = completedCellColor;
                 }
             }
         }
@@ -385,7 +469,7 @@ public class OpponentBoardPanel : MonoBehaviour
         outerGrid.padding = new RectOffset(39, 39, 43, 43);
 
         cellImages = new Image[81];
-        cellTexts  = new TMP_Text[81];
+        cellTexts = new TMP_Text[81];
 
         for (int boxRow = 0; boxRow < 3; boxRow++)
         {
@@ -470,6 +554,8 @@ public class OpponentBoardPanel : MonoBehaviour
 
         if (opponentNameText != null) opponentNameText.color = headerNameColor;
         if (opponentProgressText != null) opponentProgressText.color = progressTextColor;
+        if (opponentScoreText != null) opponentScoreText.color = scoreTextColor;
+        if (opponentLivesText != null) opponentLivesText.color = livesTextColor;
 
         if (closeButton != null)
         {

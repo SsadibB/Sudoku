@@ -2,6 +2,7 @@ using System.Collections;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UI;
+using UnityEngine.EventSystems;
 using TMPro;
 using DG.Tweening;
 
@@ -29,6 +30,7 @@ public class CompetitionRoomUI : MonoBehaviour
     [SerializeField] private GameObject hostWaitGroup;
     [SerializeField] private TMP_Text roomCodeText;
     [SerializeField] private TMP_Text hostStatusText;
+    [SerializeField] private TMP_Text copiedFeedbackText;  // Optional label that flashes "Copied!"
     [SerializeField] private Button cancelHostButton;
 
     [Header("Join Flow")]
@@ -46,6 +48,7 @@ public class CompetitionRoomUI : MonoBehaviour
     [SerializeField] private float animDuration = 0.3f;
 
     private UIManager.Difficulty selectedHostDifficulty;
+    private Coroutine copiedFeedbackCoroutine;
 
     private void Awake()
     {
@@ -60,6 +63,143 @@ public class CompetitionRoomUI : MonoBehaviour
         if (cancelJoinButton != null)   cancelJoinButton.onClick.AddListener(OnCancelJoinClicked);
         if (joinConfirmButton != null)  joinConfirmButton.onClick.AddListener(OnJoinConfirmClicked);
         if (backButton != null)         backButton.onClick.AddListener(OnBackClicked);
+
+        // Make the room code label tappable: clicking it copies the code.
+        WireRoomCodeCopyButton();
+
+        // Hide copy feedback label initially.
+        if (copiedFeedbackText != null)
+            copiedFeedbackText.gameObject.SetActive(false);
+    }
+
+    // ---- Room code copy ----
+
+    /// <summary>
+    /// Adds a transparent Button (or EventTrigger) on the roomCodeText GameObject so
+    /// a single tap copies the code to the system clipboard and flashes "Copied!".
+    /// </summary>
+    private void WireRoomCodeCopyButton()
+    {
+        if (roomCodeText == null) return;
+
+        // Ensure the image component exists so Button raycasts work.
+        var img = roomCodeText.GetComponent<UnityEngine.UI.Image>();
+        if (img == null)
+        {
+            img = roomCodeText.gameObject.AddComponent<UnityEngine.UI.Image>();
+            img.color = new Color(0f, 0f, 0f, 0f); // fully transparent
+        }
+
+        // Add a Button if not already present.
+        var btn = roomCodeText.GetComponent<Button>();
+        if (btn == null)
+            btn = roomCodeText.gameObject.AddComponent<Button>();
+
+        btn.transition = Selectable.Transition.None; // no colour flicker on the text
+        btn.onClick.RemoveAllListeners();
+        btn.onClick.AddListener(OnRoomCodeTapped);
+    }
+
+    private void OnRoomCodeTapped()
+    {
+        if (roomCodeText == null) return;
+        string code = roomCodeText.text.Trim();
+        if (string.IsNullOrEmpty(code) || code == "------") return;
+
+        // Copy to clipboard.
+        GUIUtility.systemCopyBuffer = code;
+
+        // Flash "Copied!" feedback.
+        if (copiedFeedbackCoroutine != null) StopCoroutine(copiedFeedbackCoroutine);
+        copiedFeedbackCoroutine = StartCoroutine(ShowCopiedFeedback());
+    }
+
+    private IEnumerator ShowCopiedFeedback()
+    {
+        if (copiedFeedbackText == null) yield break;
+        copiedFeedbackText.text = "Copied!";
+        copiedFeedbackText.gameObject.SetActive(true);
+
+        // Fade in.
+        CanvasGroup cg = copiedFeedbackText.GetComponent<CanvasGroup>();
+        if (cg == null) cg = copiedFeedbackText.gameObject.AddComponent<CanvasGroup>();
+        cg.alpha = 0f;
+        cg.DOFade(1f, 0.15f).SetLink(copiedFeedbackText.gameObject);
+
+        yield return new WaitForSeconds(1.4f);
+
+        // Fade out.
+        cg.DOFade(0f, 0.3f)
+          .OnComplete(() => copiedFeedbackText.gameObject.SetActive(false))
+          .SetLink(copiedFeedbackText.gameObject);
+    }
+
+    // ---- Join input paste support ----
+
+    /// <summary>
+    /// Called after the join group becomes active to attach paste-on-hold behaviour
+    /// to the room code input field.
+    /// </summary>
+    private void SetupJoinInputPaste()
+    {
+        if (roomCodeInput == null) return;
+
+        // On mobile the native keyboard context menu already offers Paste when
+        // the user long-presses an InputField, but we make it explicit by also
+        // wiring a PointerDown EventTrigger that pastes clipboard text after a hold.
+        EventTrigger trigger = roomCodeInput.GetComponent<EventTrigger>();
+        if (trigger == null) trigger = roomCodeInput.gameObject.AddComponent<EventTrigger>();
+
+        // Remove any old entries to avoid duplicates.
+        trigger.triggers.RemoveAll(e => e.eventID == EventTriggerType.PointerDown
+                                     && e.callback.GetPersistentEventCount() == 0);
+
+        var entry = new EventTrigger.Entry { eventID = EventTriggerType.PointerDown };
+        entry.callback.AddListener((_) => StartCoroutine(CheckHoldForPaste()));
+        trigger.triggers.Add(entry);
+    }
+
+    private Coroutine holdPasteCoroutine;
+    private bool pointerStillDown;
+
+    private IEnumerator CheckHoldForPaste()
+    {
+        pointerStillDown = true;
+        float holdTime = 0f;
+        bool pasted = false;
+
+        while (pointerStillDown && holdTime < 0.6f)
+        {
+            holdTime += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        if (pointerStillDown && !pasted)
+        {
+            string clip = GUIUtility.systemCopyBuffer;
+            if (!string.IsNullOrEmpty(clip))
+            {
+                roomCodeInput.text = clip.Trim().ToUpper();
+                // Show brief "Pasted" feedback in join status label.
+                if (joinStatusText != null)
+                {
+                    joinStatusText.text = "Pasted from clipboard";
+                    yield return new WaitForSeconds(1.5f);
+                    if (joinStatusText.text == "Pasted from clipboard")
+                        joinStatusText.text = "";
+                }
+            }
+        }
+    }
+
+    // Pointer-up listener to cancel the hold check.
+    private void Update()
+    {
+        if (!UnityEngine.Input.GetMouseButton(0) &&
+            UnityEngine.Input.touchCount == 0)
+        {
+            pointerStillDown = false;
+        }
     }
 
     private void OnEnable()
@@ -195,6 +335,13 @@ public class CompetitionRoomUI : MonoBehaviour
         if (joinStatusText != null)      joinStatusText.text = "";
         if (guestDifficultyText != null) guestDifficultyText.text = "";
         if (roomCodeInput != null)       roomCodeInput.text = "";
+
+        // Always re-enable the join button in case it was left disabled from a
+        // previous attempt that was cancelled before the connection resolved.
+        if (joinConfirmButton != null) joinConfirmButton.interactable = true;
+
+        // Wire paste-on-hold for the input field each time the join panel is shown.
+        SetupJoinInputPaste();
     }
 
     private void OnJoinConfirmClicked()
@@ -227,6 +374,11 @@ public class CompetitionRoomUI : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX("Button");
         MultiplayerManager.Instance?.Disconnect();
+
+        // Restore the join button so it works on the next attempt.
+        if (joinConfirmButton != null) joinConfirmButton.interactable = true;
+        if (joinStatusText != null)    joinStatusText.text = "";
+
         ShowModeChooser();
     }
 

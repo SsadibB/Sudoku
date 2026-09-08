@@ -12,6 +12,10 @@ public class HeartManager : MonoBehaviour
     [SerializeField] private Sprite halfHeartSprite;
     [SerializeField] private Sprite emptyHeartSprite;
 
+    public Sprite FullHeartSprite => fullHeartSprite;
+    public Sprite HalfHeartSprite => halfHeartSprite;
+    public Sprite EmptyHeartSprite => emptyHeartSprite;
+
     [Header("Straw Hat Fall Effect (2 hats per heart slot = 6 total)")]
     [Tooltip("6 straw hat RectTransforms, 2 per heart slot, in this exact order:\n[0] Heart 0 - 1st half lost, [1] Heart 0 - 2nd half lost,\n[2] Heart 1 - 1st half lost, [3] Heart 1 - 2nd half lost,\n[4] Heart 2 - 1st half lost, [5] Heart 2 - 2nd half lost.\nPosition each one in the Scene above its matching heart - that position becomes its reset/start pose. Left/right jump direction is auto-detected by comparing each pair's X position.")]
     [SerializeField] private RectTransform[] strawHatRects;

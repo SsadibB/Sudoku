@@ -24,6 +24,12 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     [Networked] public float FinishTime { get; set; }
     [Networked] public NetworkBool HasForfeited { get; set; }
 
+    // Live session score, mirrors SudokuGameManager.SessionScore
+    [Networked] public int Score { get; set; }
+
+    // Live half-heart count (0-6), mirrors HeartManager.CurrentHalfHearts
+    [Networked] public int HalfHearts { get; set; }
+
     public static event System.Action<NetworkSudokuPlayer> OnPlayerForfeited;
 
     // Synchronized puzzle level for multiplayer (set by Master Client)
@@ -47,6 +53,10 @@ public class NetworkSudokuPlayer : NetworkBehaviour
                 ? MultiplayerManager.Instance.LocalPlayerName
                 : "Player";
             PlayerName = new NetworkString<_32>(name);
+
+            // Start with full hearts and zero score until the game reports otherwise
+            HalfHearts = HeartManager.MaxHalfHearts;
+            Score = 0;
 
             // If Master Client, publish the match level
             if (Runner.IsSharedModeMasterClient && MultiplayerManager.Instance != null)
@@ -113,6 +123,20 @@ public class NetworkSudokuPlayer : NetworkBehaviour
                 if (val > 0) count++;
             }
         CompletedCells = count;
+    }
+
+    /// <summary>Push the local player's live score so the opponent's board panel can show it.</summary>
+    public void UpdateScore(int score)
+    {
+        if (!HasStateAuthority) return;
+        Score = score;
+    }
+
+    /// <summary>Push the local player's live half-heart count so the opponent's board panel can show it.</summary>
+    public void UpdateHalfHearts(int halfHearts)
+    {
+        if (!HasStateAuthority) return;
+        HalfHearts = halfHearts;
     }
 
     /// <summary>Mark this player as finished.</summary>

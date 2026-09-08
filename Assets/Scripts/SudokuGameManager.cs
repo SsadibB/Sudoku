@@ -123,6 +123,8 @@ public class SudokuGameManager : MonoBehaviour
     public event System.Action<int, int, int, bool> OnCellChanged;
     // OnBoardComplete — fired when the board is fully solved (victory)
     public event System.Action OnBoardComplete;
+    // OnHeartsChanged(halfHearts) — fired whenever the local player's heart count changes
+    public event System.Action<int> OnHeartsChanged;
 
     private int[,] solutionGrid;
     private int[,] puzzleGrid;
@@ -133,6 +135,11 @@ public class SudokuGameManager : MonoBehaviour
     // Which Level (1-1000) of currentDifficulty is currently being played.
     private int currentLevel;
     public int CurrentLevel => currentLevel;
+
+    // ---- Multiplayer read-only accessors (for OpponentBoardPanel / networking) ----
+    public int SessionScore => sessionScore;
+    public int CurrentHalfHearts => heartManager != null ? heartManager.CurrentHalfHearts : HeartManager.MaxHalfHearts;
+    public event System.Action<int> OnScoreChanged;
 
     private Sequence outputPanelSequence;
 
@@ -299,6 +306,7 @@ public class SudokuGameManager : MonoBehaviour
         if (heartManager != null)
         {
             heartManager.OnGameOver += HandleGameOver;
+            heartManager.OnHalfHeartDeducted += HandleHeartsChanged;
         }
 
         // Difficulty selection buttons in GameScene (if present)
@@ -320,7 +328,10 @@ public class SudokuGameManager : MonoBehaviour
         StopRandomSfxLoop();
 
         if (heartManager != null)
+        {
             heartManager.OnGameOver -= HandleGameOver;
+            heartManager.OnHalfHeartDeducted -= HandleHeartsChanged;
+        }
 
         if (outputNextButton != null) outputNextButton.onClick.RemoveListener(OnOutputNextClicked);
         if (outputRestartButton != null) outputRestartButton.onClick.RemoveListener(OnOutputRestartClicked);
@@ -350,6 +361,7 @@ public class SudokuGameManager : MonoBehaviour
         levelElapsedSeconds = 0f;
 
         if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
+        OnScoreChanged?.Invoke(sessionScore);
         if (hudTimeText != null) hudTimeText.text = $"Time:{FormatElapsedTime(0f)}";
 
         (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty, currentLevel);
@@ -788,6 +800,12 @@ public class SudokuGameManager : MonoBehaviour
         ShowOutputPanel(isVictory: false);
     }
 
+    // ---- Multiplayer hook: forwards heartManager's half-heart deductions ----
+    private void HandleHeartsChanged(int halfHearts)
+    {
+        OnHeartsChanged?.Invoke(halfHearts);
+    }
+
     private void ShowOutputPanel(bool isVictory)
     {
         if (outputPanel == null) return;
@@ -940,6 +958,7 @@ public class SudokuGameManager : MonoBehaviour
     private void UpdateScoreHud()
     {
         if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
+        OnScoreChanged?.Invoke(sessionScore);
     }
 
     private enum ConfirmationAction
@@ -1006,13 +1025,27 @@ public class SudokuGameManager : MonoBehaviour
     {
         StopRandomSfxLoop();
 
-        // If in multiplayer, notify opponent of forfeit and disconnect runner
+        // In multiplayer: forfeit the game and show the local player the Lose result
+        // panel. Do NOT disconnect here — the result panel's "Return to Menu" button
+        // handles Disconnect() and scene navigation. The opponent receives the forfeit
+        // RPC and sees the Win result panel on their side.
         if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession)
         {
-            NetworkSudokuPlayer.Local?.Forfeit();
-            MultiplayerManager.Instance.Disconnect();
+            if (MultiplayerGameController.Instance != null)
+            {
+                MultiplayerGameController.Instance.ShowLocalPlayerForfeit();
+            }
+            else
+            {
+                // Fallback: no controller found, just forfeit and disconnect cleanly.
+                NetworkSudokuPlayer.Local?.Forfeit();
+                MultiplayerManager.Instance.Disconnect();
+                PromptDifficultySelection();
+            }
+            return;
         }
 
+        // Single-player: go straight back to the difficulty/menu screen.
         PromptDifficultySelection();
     }
 
@@ -1082,6 +1115,13 @@ public class SudokuGameManager : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX("Button");
 
+        // In multiplayer: immediately forfeit without confirmation dialog
+        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession)
+        {
+            ExecuteBackToMenu();
+            return;
+        }
+
         if (restartConfirmationPanel != null)
         {
             pendingConfirmationAction = ConfirmationAction.BackToMenu;
@@ -1091,6 +1131,19 @@ public class SudokuGameManager : MonoBehaviour
         else
         {
             ExecuteBackToMenu();
+        }
+    }
+
+    /// <summary>
+    /// Freezes the local game immediately when multiplayer game ends or a player forfeits.
+    /// </summary>
+    public void EndGameForMultiplayer()
+    {
+        isGameActive = false;
+        StopRandomSfxLoop();
+        if (gridLayout != null)
+        {
+            gridLayout.ClearSelection();
         }
     }
 

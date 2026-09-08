@@ -35,7 +35,7 @@ public class MultiplayerResultPanel : MonoBehaviour
 
     private void Awake()
     {
-        if (panelRoot != null) panelRoot.SetActive(false);
+        if (panelRoot != null && panelRoot != gameObject) panelRoot.SetActive(false);
         if (returnToMenuButton != null) returnToMenuButton.onClick.AddListener(OnReturnToMenu);
         if (playAgainButton != null)    playAgainButton.onClick.AddListener(OnPlayAgain);
     }
@@ -52,7 +52,8 @@ public class MultiplayerResultPanel : MonoBehaviour
     /// <param name="localTime">Local player's finish time in seconds.</param>
     public void Show(bool isWinner, float localTime)
     {
-        if (panelRoot == null) return;
+        gameObject.SetActive(true);
+        if (panelRoot == null) panelRoot = gameObject;
 
         // Banner
         if (winnerBanner != null) winnerBanner.SetActive(isWinner);

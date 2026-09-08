@@ -11,6 +11,8 @@ using Fusion;
 /// </summary>
 public class MultiplayerGameController : MonoBehaviour
 {
+    public static MultiplayerGameController Instance { get; private set; }
+
     [Header("References (assign in Inspector or via MultiplayerManager)")]
     [SerializeField] private MultiplayerResultPanel resultPanel;
     [SerializeField] private OpponentBoardPanel opponentBoardPanel;
@@ -20,6 +22,7 @@ public class MultiplayerGameController : MonoBehaviour
     private SudokuGameManager gameManager;
 
     private bool gameStarted;
+    private bool isOpponentLeftHandled;
     private float gameStartTime;
 
     // ---- Spawner: NetworkSudokuPlayer prefab ----
@@ -28,6 +31,8 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void Start()
     {
+        Instance = this;
+
         bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
 
         if (boardButton != null)
@@ -60,6 +65,8 @@ public class MultiplayerGameController : MonoBehaviour
         gameManager.OnCellCorrect += HandleCellCorrect;
         gameManager.OnCellChanged += HandleCellChanged;
         gameManager.OnBoardComplete += HandleBoardComplete;
+        gameManager.OnHeartsChanged += HandleHeartsChanged;
+        gameManager.OnScoreChanged += HandleScoreChanged;
 
         // Listen for opponent leaving or forfeiting
         MultiplayerManager.Instance.OnOpponentLeft += HandleOpponentLeft;
@@ -73,17 +80,42 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void OnDestroy()
     {
+        if (Instance == this) Instance = null;
+
         if (gameManager != null)
         {
             gameManager.OnCellCorrect -= HandleCellCorrect;
             gameManager.OnCellChanged -= HandleCellChanged;
             gameManager.OnBoardComplete -= HandleBoardComplete;
+            gameManager.OnHeartsChanged -= HandleHeartsChanged;
+            gameManager.OnScoreChanged -= HandleScoreChanged;
         }
 
         if (MultiplayerManager.Instance != null)
             MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentLeft;
 
         NetworkSudokuPlayer.OnPlayerForfeited -= HandlePlayerForfeited;
+    }
+
+    private void OnApplicationPause(bool paused)
+    {
+        // On Android, pressing the home button or switching apps pauses the app.
+        // Forfeit and disconnect so the opponent immediately gets the win.
+        if (paused && gameStarted)
+        {
+            gameStarted = false;
+            NetworkSudokuPlayer.Local?.Forfeit();
+            MultiplayerManager.Instance?.Disconnect();
+        }
+    }
+
+    private void OnApplicationQuit()
+    {
+        if (gameStarted)
+        {
+            gameStarted = false;
+            NetworkSudokuPlayer.Local?.Forfeit();
+        }
     }
 
     private void Update()
@@ -96,13 +128,13 @@ public class MultiplayerGameController : MonoBehaviour
         {
             if (remote.HasForfeited)
             {
-                gameStarted = false;
-                float elapsed = Time.time - gameStartTime;
-                ShowResult(isWinner: true, elapsed);
+                // Route through the same guard as HandleOpponentLeft
+                HandleOpponentLeft();
             }
             else if (remote.IsFinished)
             {
                 gameStarted = false;
+                gameManager?.EndGameForMultiplayer();
                 float elapsed = Time.time - gameStartTime;
                 ShowResult(isWinner: false, elapsed);
             }
@@ -175,6 +207,11 @@ public class MultiplayerGameController : MonoBehaviour
             var puzzle = gameManager.GetCurrentPuzzle();
             if (puzzle != null)
                 NetworkSudokuPlayer.Local.InitBoardSnapshot(puzzle);
+
+            // Push the starting score and hearts so the opponent's board panel
+            // shows accurate values from the very first frame.
+            NetworkSudokuPlayer.Local.UpdateScore(gameManager.SessionScore);
+            NetworkSudokuPlayer.Local.UpdateHalfHearts(gameManager.CurrentHalfHearts);
         }
 
         // Register and initialize opponent board panel
@@ -192,6 +229,10 @@ public class MultiplayerGameController : MonoBehaviour
     {
         if (!gameStarted) return;
         NetworkSudokuPlayer.Local?.RecordCorrectCell(row, col, (byte)value);
+
+        // Correct placements (and any row/column/box bonuses they trigger)
+        // are already reflected in gameManager.SessionScore by this point.
+        NetworkSudokuPlayer.Local?.UpdateScore(gameManager.SessionScore);
     }
 
     private void HandleCellChanged(int row, int col, int value, bool isCorrect)
@@ -200,12 +241,30 @@ public class MultiplayerGameController : MonoBehaviour
         NetworkSudokuPlayer.Local?.RecordCellChange(row, col, (byte)value, isCorrect);
     }
 
+    private void HandleHeartsChanged(int halfHearts)
+    {
+        if (!gameStarted) return;
+        NetworkSudokuPlayer.Local?.UpdateHalfHearts(halfHearts);
+    }
+
+    private void HandleScoreChanged(int score)
+    {
+        if (!gameStarted) return;
+        NetworkSudokuPlayer.Local?.UpdateScore(score);
+    }
+
     private void HandleBoardComplete()
     {
         if (!gameStarted) return;
         gameStarted = false;
 
+        gameManager?.EndGameForMultiplayer();
+
         float elapsed = Time.time - gameStartTime;
+
+        // The board-complete score bonus is already added to gameManager.SessionScore
+        // before OnBoardComplete fires — push the final total.
+        NetworkSudokuPlayer.Local?.UpdateScore(gameManager.SessionScore);
         NetworkSudokuPlayer.Local?.MarkFinished(elapsed);
 
         // Determine winner: whoever flags Finished first wins.
@@ -215,27 +274,34 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void HandleOpponentLeft()
     {
-        if (!gameStarted) return;
+        // Guard: only fire once (OnOpponentLeft and HasForfeited can both trigger on disconnect)
+        if (isOpponentLeftHandled) return;
+        isOpponentLeftHandled = true;
         gameStarted = false;
 
-        // Opponent disconnected — local player wins by default
+        gameManager?.EndGameForMultiplayer();
+
+        // Opponent disconnected/forfeited — local player wins by default
         float elapsed = Time.time - gameStartTime;
         ShowResult(isWinner: true, elapsed);
     }
 
     private void HandlePlayerForfeited(NetworkSudokuPlayer player)
     {
-        if (!gameStarted) return;
-        if (player != NetworkSudokuPlayer.Local)
-        {
-            gameStarted = false;
-            float elapsed = Time.time - gameStartTime;
-            ShowResult(isWinner: true, elapsed);
-        }
+        // Only react to the remote (opponent) forfeiting, not the local player's own forfeit.
+        if (player == NetworkSudokuPlayer.Local) return;
+
+        // Route through the same guard as HandleOpponentLeft to avoid double-results.
+        HandleOpponentLeft();
     }
 
     private void ShowResult(bool isWinner, float elapsed)
     {
+        gameManager?.EndGameForMultiplayer();
+
+        if (opponentBoardPanel != null)
+            opponentBoardPanel.Hide();
+
         if (resultPanel != null)
             resultPanel.Show(isWinner, elapsed);
     }
@@ -246,5 +312,30 @@ public class MultiplayerGameController : MonoBehaviour
     {
         if (opponentBoardPanel != null)
             opponentBoardPanel.Toggle();
+    }
+
+    /// <summary>
+    /// Called when the local player deliberately leaves the game (back button confirmed).
+    /// Sends the forfeit RPC to the opponent (they will see the Win panel via
+    /// HandleOpponentLeft / HandlePlayerForfeited), then immediately shows the Lose
+    /// result panel to the leaving player so they get proper feedback before the
+    /// "Return to Menu" button disconnects and navigates away.
+    /// </summary>
+    public void ShowLocalPlayerForfeit()
+    {
+        if (isOpponentLeftHandled) return;
+        isOpponentLeftHandled = true;
+        gameStarted = false;
+
+        gameManager?.EndGameForMultiplayer();
+
+        // Notify the opponent over the network.
+        NetworkSudokuPlayer.Local?.Forfeit();
+
+        // Show lose result to the leaving player.
+        // Do NOT call Disconnect() here — MultiplayerResultPanel.OnReturnToMenu
+        // already calls Disconnect() and loads MainMenu when the player taps the button.
+        float elapsed = Time.time - gameStartTime;
+        ShowResult(isWinner: false, elapsed);
     }
 }
