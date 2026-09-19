@@ -50,6 +50,8 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private UIManager.Difficulty selectedHostDifficulty;
     private Coroutine copiedFeedbackCoroutine;
+    private Coroutine pastedFeedbackCoroutine;
+    private Coroutine holdHintCoroutine;
 
     private void Awake()
     {
@@ -65,141 +67,282 @@ public class CompetitionRoomUI : MonoBehaviour
         if (joinConfirmButton != null)  joinConfirmButton.onClick.AddListener(OnJoinConfirmClicked);
         if (backButton != null)         backButton.onClick.AddListener(OnBackClicked);
 
-        // Make the room code label tappable: clicking it copies the code.
-        WireRoomCodeCopyButton();
+        // Ensure the "Copied" feedback text component is ready
+        EnsureCopiedFeedbackText();
+
+        // Tap & hold the generated room code -> automatically copy the code
+        WireRoomCodeCopy();
+
+        // Tap the Enter Code input field -> automatically paste the copied code
+        SetupJoinInputPaste();
 
         // Hide copy feedback label initially.
         if (copiedFeedbackText != null)
             copiedFeedbackText.gameObject.SetActive(false);
     }
 
-    // ---- Room code copy ----
+    // ---- Room code tap & hold copy ----
 
-    /// <summary>
-    /// Adds a transparent Button (or EventTrigger) on the roomCodeText GameObject so
-    /// a single tap copies the code to the system clipboard and flashes "Copied!".
-    /// </summary>
-    private void WireRoomCodeCopyButton()
+    private void WireRoomCodeCopy()
     {
         if (roomCodeText == null) return;
 
-        // Ensure the image component exists so Button raycasts work.
-        var img = roomCodeText.GetComponent<UnityEngine.UI.Image>();
-        if (img == null)
+        roomCodeText.raycastTarget = true;
+
+        // Remove any old Button component so it does not intercept pointer events
+        var oldBtn = roomCodeText.GetComponent<Button>();
+        if (oldBtn != null)
         {
-            img = roomCodeText.gameObject.AddComponent<UnityEngine.UI.Image>();
-            img.color = new Color(0f, 0f, 0f, 0f); // fully transparent
+            if (Application.isPlaying) Destroy(oldBtn);
+            else DestroyImmediate(oldBtn);
         }
 
-        // Add a Button if not already present.
-        var btn = roomCodeText.GetComponent<Button>();
-        if (btn == null)
-            btn = roomCodeText.gameObject.AddComponent<Button>();
+        var holdTrigger = roomCodeText.GetComponent<RoomCodeHoldTrigger>();
+        if (holdTrigger == null)
+        {
+            holdTrigger = roomCodeText.gameObject.AddComponent<RoomCodeHoldTrigger>();
+        }
 
-        btn.transition = Selectable.Transition.None; // no colour flicker on the text
-        btn.onClick.RemoveAllListeners();
-        btn.onClick.AddListener(OnRoomCodeTapped);
+        holdTrigger.holdDuration = 0.45f;
+        holdTrigger.onPointerDownAction = () =>
+        {
+            roomCodeText.transform.DOScale(0.94f, 0.12f).SetLink(roomCodeText.gameObject);
+        };
+        holdTrigger.onPointerUpAction = (wasHoldTriggered) =>
+        {
+            roomCodeText.transform.DOScale(1f, 0.1f).SetLink(roomCodeText.gameObject);
+            if (!wasHoldTriggered)
+            {
+                ShowHoldHint();
+            }
+        };
+        holdTrigger.onHoldComplete = OnRoomCodeHoldSuccess;
     }
 
-    private void OnRoomCodeTapped()
+    private void OnRoomCodeHoldSuccess()
     {
         if (roomCodeText == null) return;
         string code = roomCodeText.text.Trim();
         if (string.IsNullOrEmpty(code) || code == "------") return;
 
-        // Copy to clipboard.
-        GUIUtility.systemCopyBuffer = code;
+        // Copy via cross-platform ClipboardHelper (Android native JNI, Unity buffer, session cache)
+        ClipboardHelper.CopyToClipboard(code);
 
-        // Flash "Copied!" feedback.
+        // Tactile punch animation
+        roomCodeText.transform.DOKill();
+        roomCodeText.transform.localScale = Vector3.one;
+        roomCodeText.transform.DOPunchScale(Vector3.one * 0.15f, 0.25f, 5, 0.5f).SetLink(roomCodeText.gameObject);
+
+        // Mobile haptic vibration if supported
+#if (UNITY_ANDROID || UNITY_IOS) && !UNITY_EDITOR
+        try { Handheld.Vibrate(); } catch { }
+#endif
+        SoundManager.Instance?.PlaySFX("Button");
+
+        // Immediately show "Copied" feedback
+        EnsureCopiedFeedbackText();
+        if (copiedFeedbackText != null)
+        {
+            copiedFeedbackText.text = "Copied";
+            copiedFeedbackText.gameObject.SetActive(true);
+
+            CanvasGroup cg = copiedFeedbackText.GetComponent<CanvasGroup>();
+            if (cg == null) cg = copiedFeedbackText.gameObject.AddComponent<CanvasGroup>();
+            cg.alpha = 1f;
+            cg.DOKill();
+
+            copiedFeedbackText.transform.DOKill();
+            copiedFeedbackText.transform.localScale = Vector3.one * 0.85f;
+            copiedFeedbackText.transform.DOScale(1f, 0.15f).SetEase(Ease.OutBack).SetLink(copiedFeedbackText.gameObject);
+        }
+
+        if (hostStatusText != null)
+        {
+            hostStatusText.text = "Copied to clipboard!";
+        }
+
+        // Flash "Copied" feedback fadeout
         if (copiedFeedbackCoroutine != null) StopCoroutine(copiedFeedbackCoroutine);
         copiedFeedbackCoroutine = StartCoroutine(ShowCopiedFeedback());
     }
 
-    private IEnumerator ShowCopiedFeedback()
+    private void ShowHoldHint()
     {
-        if (copiedFeedbackText == null) yield break;
-        copiedFeedbackText.text = "Copied!";
-        copiedFeedbackText.gameObject.SetActive(true);
-
-        // Fade in.
-        CanvasGroup cg = copiedFeedbackText.GetComponent<CanvasGroup>();
-        if (cg == null) cg = copiedFeedbackText.gameObject.AddComponent<CanvasGroup>();
-        cg.alpha = 0f;
-        cg.DOFade(1f, 0.15f).SetLink(copiedFeedbackText.gameObject);
-
-        yield return new WaitForSeconds(1.4f);
-
-        // Fade out.
-        cg.DOFade(0f, 0.3f)
-          .OnComplete(() => copiedFeedbackText.gameObject.SetActive(false))
-          .SetLink(copiedFeedbackText.gameObject);
+        if (hostStatusText != null && hostStatusText.text.StartsWith("Share this code"))
+        {
+            if (holdHintCoroutine != null) StopCoroutine(holdHintCoroutine);
+            holdHintCoroutine = StartCoroutine(ShowHoldHintRoutine());
+        }
     }
 
-    // ---- Join input paste support ----
+    private IEnumerator ShowHoldHintRoutine()
+    {
+        string original = hostStatusText.text;
+        hostStatusText.text = "Tap & hold code to copy!";
+        yield return new WaitForSeconds(1.5f);
+        if (hostStatusText != null && hostStatusText.text == "Tap & hold code to copy!")
+        {
+            hostStatusText.text = original;
+        }
+    }
+
+    private void EnsureCopiedFeedbackText()
+    {
+        if (copiedFeedbackText != null) return;
+
+        if (hostWaitGroup != null)
+        {
+            var tr = hostWaitGroup.transform.Find("CopiedFeedbackText");
+            if (tr != null)
+            {
+                copiedFeedbackText = tr.GetComponent<TMP_Text>();
+                return;
+            }
+        }
+
+        if (hostWaitGroup != null && roomCodeText != null)
+        {
+            var go = new GameObject("CopiedFeedbackText");
+            go.transform.SetParent(hostWaitGroup.transform, false);
+
+            var rt = go.AddComponent<RectTransform>();
+            rt.anchorMin = new Vector2(0.5f, 0.5f);
+            rt.anchorMax = new Vector2(0.5f, 0.5f);
+            rt.pivot = new Vector2(0.5f, 0.5f);
+            rt.anchoredPosition = new Vector2(0f, 65f);
+            rt.sizeDelta = new Vector2(260f, 50f);
+
+            var tmp = go.AddComponent<TextMeshProUGUI>();
+            tmp.font = roomCodeText.font;
+            tmp.fontSize = 42;
+            tmp.fontStyle = FontStyles.Bold;
+            tmp.alignment = TextAlignmentOptions.Center;
+            tmp.color = new Color(0.2f, 0.8f, 0.4f, 1f);
+            tmp.text = "Copied";
+            tmp.raycastTarget = false;
+
+            go.AddComponent<CanvasGroup>();
+            go.SetActive(false);
+            copiedFeedbackText = tmp;
+        }
+    }
+
+    private IEnumerator ShowCopiedFeedback()
+    {
+        EnsureCopiedFeedbackText();
+        if (copiedFeedbackText != null)
+        {
+            copiedFeedbackText.text = "Copied";
+            copiedFeedbackText.gameObject.SetActive(true);
+
+            CanvasGroup cg = copiedFeedbackText.GetComponent<CanvasGroup>();
+            if (cg == null) cg = copiedFeedbackText.gameObject.AddComponent<CanvasGroup>();
+            cg.alpha = 0f;
+            cg.DOKill();
+            cg.DOFade(1f, 0.15f).SetLink(copiedFeedbackText.gameObject);
+
+            copiedFeedbackText.transform.DOKill();
+            copiedFeedbackText.transform.localScale = Vector3.one * 0.85f;
+            copiedFeedbackText.transform.DOScale(1f, 0.15f).SetEase(Ease.OutBack).SetLink(copiedFeedbackText.gameObject);
+        }
+
+        if (hostStatusText != null)
+        {
+            hostStatusText.text = "Copied to clipboard!";
+        }
+
+        yield return new WaitForSeconds(1.5f);
+
+        if (copiedFeedbackText != null)
+        {
+            CanvasGroup cg = copiedFeedbackText.GetComponent<CanvasGroup>();
+            if (cg != null)
+            {
+                cg.DOFade(0f, 0.25f)
+                  .OnComplete(() => copiedFeedbackText.gameObject.SetActive(false))
+                  .SetLink(copiedFeedbackText.gameObject);
+            }
+            else
+            {
+                copiedFeedbackText.gameObject.SetActive(false);
+            }
+        }
+
+        if (hostStatusText != null && hostStatusText.text == "Copied to clipboard!")
+        {
+            hostStatusText.text = "Share this code. Waiting for opponent…";
+        }
+    }
+
+    // ---- Join input tap-to-paste ----
 
     /// <summary>
-    /// Called after the join group becomes active to attach paste-on-hold behaviour
-    /// to the room code input field.
+    /// Attaches tap-to-paste behaviour to the room code input field.
     /// </summary>
     private void SetupJoinInputPaste()
     {
         if (roomCodeInput == null) return;
 
-        // On mobile the native keyboard context menu already offers Paste when
-        // the user long-presses an InputField, but we make it explicit by also
-        // wiring a PointerDown EventTrigger that pastes clipboard text after a hold.
-        EventTrigger trigger = roomCodeInput.GetComponent<EventTrigger>();
-        if (trigger == null) trigger = roomCodeInput.gameObject.AddComponent<EventTrigger>();
-
-        // Remove any old entries to avoid duplicates.
-        trigger.triggers.RemoveAll(e => e.eventID == EventTriggerType.PointerDown
-                                     && e.callback.GetPersistentEventCount() == 0);
-
-        var entry = new EventTrigger.Entry { eventID = EventTriggerType.PointerDown };
-        entry.callback.AddListener((_) => StartCoroutine(CheckHoldForPaste()));
-        trigger.triggers.Add(entry);
-    }
-
-    private Coroutine holdPasteCoroutine;
-    private bool pointerStillDown;
-
-    private IEnumerator CheckHoldForPaste()
-    {
-        pointerStillDown = true;
-        float holdTime = 0f;
-        bool pasted = false;
-
-        while (pointerStillDown && holdTime < 0.6f)
+        var oldTrigger = roomCodeInput.GetComponent<EventTrigger>();
+        if (oldTrigger != null)
         {
-            holdTime += Time.unscaledDeltaTime;
-            yield return null;
+            if (Application.isPlaying) Destroy(oldTrigger);
+            else DestroyImmediate(oldTrigger);
         }
 
-        if (pointerStillDown && !pasted)
+        var pasteTrigger = roomCodeInput.GetComponent<RoomCodeTapPasteTrigger>();
+        if (pasteTrigger == null)
         {
-            string clip = GUIUtility.systemCopyBuffer;
-            if (!string.IsNullOrEmpty(clip))
+            pasteTrigger = roomCodeInput.gameObject.AddComponent<RoomCodeTapPasteTrigger>();
+        }
+
+        pasteTrigger.onTap = TryPasteFromClipboard;
+
+        roomCodeInput.onSelect.RemoveListener(OnInputSelected);
+        roomCodeInput.onSelect.AddListener(OnInputSelected);
+    }
+
+    private void OnInputSelected(string _)
+    {
+        TryPasteFromClipboard();
+    }
+
+    private void TryPasteFromClipboard()
+    {
+        if (roomCodeInput == null) return;
+
+        string clip = ClipboardHelper.GetFromClipboard();
+        if (string.IsNullOrEmpty(clip)) return;
+
+        string code = ClipboardHelper.ExtractRoomCode(clip);
+        if (!string.IsNullOrEmpty(code))
+        {
+            roomCodeInput.text = code;
+            SoundManager.Instance?.PlaySFX("Button");
+
+            // Immediately display "Pasted" feedback
+            if (joinStatusText != null)
             {
-                roomCodeInput.text = clip.Trim().ToUpper();
-                // Show brief "Pasted" feedback in join status label.
-                if (joinStatusText != null)
-                {
-                    joinStatusText.text = "Pasted from clipboard";
-                    yield return new WaitForSeconds(1.5f);
-                    if (joinStatusText.text == "Pasted from clipboard")
-                        joinStatusText.text = "";
-                }
+                joinStatusText.text = "Pasted";
+                joinStatusText.alignment = TextAlignmentOptions.Center;
+
+                joinStatusText.transform.DOKill();
+                joinStatusText.transform.localScale = Vector3.one;
+                joinStatusText.transform.DOPunchScale(Vector3.one * 0.12f, 0.2f, 4, 0.5f).SetLink(joinStatusText.gameObject);
             }
+
+            if (pastedFeedbackCoroutine != null) StopCoroutine(pastedFeedbackCoroutine);
+            pastedFeedbackCoroutine = StartCoroutine(ShowPastedFeedback());
         }
     }
 
-    // Pointer-up listener to cancel the hold check.
-    private void Update()
+    private IEnumerator ShowPastedFeedback()
     {
-        if (!UnityEngine.Input.GetMouseButton(0) &&
-            UnityEngine.Input.touchCount == 0)
+        yield return new WaitForSeconds(1.5f);
+
+        if (joinStatusText != null && joinStatusText.text == "Pasted")
         {
-            pointerStillDown = false;
+            joinStatusText.text = "";
         }
     }
 
@@ -427,3 +570,76 @@ public class CompetitionRoomUI : MonoBehaviour
         MultiplayerLobbyUI.Instance?.ShowModePanel();
     }
 }
+
+/// <summary>
+/// Detects a tap-and-hold (long press) gesture on the room code text.
+/// </summary>
+public class RoomCodeHoldTrigger : MonoBehaviour, IPointerDownHandler, IPointerUpHandler, IPointerExitHandler
+{
+    public float holdDuration = 0.45f;
+    public System.Action onHoldComplete;
+    public System.Action onPointerDownAction;
+    public System.Action<bool> onPointerUpAction;
+
+    private Coroutine holdCoroutine;
+    private bool hasTriggered;
+
+    public void OnPointerDown(PointerEventData eventData)
+    {
+        hasTriggered = false;
+        if (holdCoroutine != null) StopCoroutine(holdCoroutine);
+        holdCoroutine = StartCoroutine(HoldRoutine());
+        onPointerDownAction?.Invoke();
+    }
+
+    private IEnumerator HoldRoutine()
+    {
+        float timer = 0f;
+        while (timer < holdDuration)
+        {
+            timer += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        hasTriggered = true;
+        holdCoroutine = null;
+        onHoldComplete?.Invoke();
+    }
+
+    public void OnPointerUp(PointerEventData eventData)
+    {
+        bool triggered = hasTriggered;
+        CancelHold();
+        onPointerUpAction?.Invoke(triggered);
+    }
+
+    public void OnPointerExit(PointerEventData eventData)
+    {
+        bool triggered = hasTriggered;
+        CancelHold();
+        onPointerUpAction?.Invoke(triggered);
+    }
+
+    private void CancelHold()
+    {
+        if (holdCoroutine != null)
+        {
+            StopCoroutine(holdCoroutine);
+            holdCoroutine = null;
+        }
+    }
+}
+
+/// <summary>
+/// Detects taps/clicks on the room code input field to automatically paste.
+/// </summary>
+public class RoomCodeTapPasteTrigger : MonoBehaviour, IPointerClickHandler
+{
+    public System.Action onTap;
+
+    public void OnPointerClick(PointerEventData eventData)
+    {
+        onTap?.Invoke();
+    }
+}
+
