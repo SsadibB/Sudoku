@@ -14,6 +14,7 @@ public class CompetitionRoomUI : MonoBehaviour
 {
     [Header("Root Panel")]
     [SerializeField] private GameObject competitionPanel;
+    [SerializeField] private GameObject bg1;
 
     [Header("Mode Chooser (shown first)")]
     [SerializeField] private GameObject modeChooserGroup;
@@ -264,6 +265,39 @@ public class CompetitionRoomUI : MonoBehaviour
     private void SetGroupActive(GameObject g, bool active)
     {
         if (g != null) g.SetActive(active);
+
+        if (g == hostWaitGroup)
+        {
+            UpdateHostWaitState(active);
+        }
+    }
+
+    private void UpdateHostWaitState(bool isHostWaitActive)
+    {
+        EnsureBg1Reference();
+
+        if (bg1 != null)
+            bg1.SetActive(!isHostWaitActive);
+
+        if (backButton != null)
+            backButton.gameObject.SetActive(!isHostWaitActive);
+    }
+
+    private void EnsureBg1Reference()
+    {
+        if (bg1 == null)
+        {
+            if (competitionPanel != null)
+            {
+                Transform t = competitionPanel.transform.Find("BG1");
+                if (t != null) bg1 = t.gameObject;
+            }
+            if (bg1 == null)
+            {
+                Transform t = transform.Find("BG1");
+                if (t != null) bg1 = t.gameObject;
+            }
+        }
     }
 
     // ---- Host flow ----
