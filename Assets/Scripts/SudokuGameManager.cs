@@ -183,6 +183,11 @@ public class SudokuGameManager : MonoBehaviour
 
     private readonly Stack<CellMove> undoStack = new Stack<CellMove>();
 
+    // Rewarded Ad Hint Tracking
+    private bool isHintProcessing = false;
+    private int pendingHintRow = -1;
+    private int pendingHintCol = -1;
+
     private void Awake()
     {
         if (Instance != null && Instance != this)
@@ -294,6 +299,8 @@ public class SudokuGameManager : MonoBehaviour
         if (hintButton != null) hintButton.onClick.AddListener(OnHintClicked);
         if (notesButton != null) notesButton.onClick.AddListener(OnNotesToggleClicked);
 
+        RewardedAdManager.EnsureInstance();
+
         // Output Panel Restart Button
         if (outputPanel != null)
             outputPanel.SetActive(false);
@@ -355,6 +362,11 @@ public class SudokuGameManager : MonoBehaviour
         currentLevel = Mathf.Clamp(level, 1, LevelManager.MaxLevel);
         undoStack.Clear();
         ResetScoreAwardTracking();
+
+        isHintProcessing = false;
+        pendingHintRow = -1;
+        pendingHintCol = -1;
+        if (hintButton != null) hintButton.interactable = true;
 
         sessionScore = 0;
         levelStartTime = Time.time;
@@ -718,25 +730,85 @@ public class SudokuGameManager : MonoBehaviour
 
     private void OnHintClicked()
     {
+        if (isHintProcessing) return;
         if (!isGameActive || gridLayout == null) return;
 
         SudokuCell selected = gridLayout.SelectedCell;
-        if (selected == null || selected.IsFixed) return;
+        if (selected == null || selected.IsFixed || selected.IsCorrect || selected.GetNumber() != 0)
+        {
+            UIToast.Show("Please select an empty cell first.");
+            return;
+        }
+
+        // Save selected cell coordinates
+        pendingHintRow = selected.Row;
+        pendingHintCol = selected.Col;
+
+        // Block multiple clicks
+        isHintProcessing = true;
+        if (hintButton != null) hintButton.interactable = false;
+
+        RewardedAdManager.EnsureInstance();
+
+        if (!RewardedAdManager.Instance.IsAdAvailable())
+        {
+            UIToast.Show("Ad is not available right now. Please try again.");
+            RewardedAdManager.Instance.LoadRewardedAd();
+            isHintProcessing = false;
+            if (hintButton != null) hintButton.interactable = true;
+            return;
+        }
+
+        bool rewardEarned = false;
+
+        RewardedAdManager.Instance.ShowRewardedAd(
+            onUserEarnedReward: () =>
+            {
+                rewardEarned = true;
+            },
+            onAdClosed: () =>
+            {
+                if (rewardEarned)
+                {
+                    RevealHintAt(pendingHintRow, pendingHintCol);
+                }
+                isHintProcessing = false;
+                if (hintButton != null) hintButton.interactable = true;
+            },
+            onAdFailedToShow: () =>
+            {
+                UIToast.Show("Ad is not available right now. Please try again.");
+                isHintProcessing = false;
+                if (hintButton != null) hintButton.interactable = true;
+            }
+        );
+    }
+
+    public void RevealHintAt(int row, int col)
+    {
+        if (!isGameActive || gridLayout == null || solutionGrid == null) return;
+        if (row < 0 || row >= 9 || col < 0 || col >= 9) return;
+
+        SudokuCell targetCell = gridLayout.Cells[row, col];
+        if (targetCell == null || targetCell.IsFixed) return;
 
         SoundManager.Instance?.PlaySFX("Hint");
 
-        int correctVal = solutionGrid[selected.Row, selected.Col];
-        selected.SetFixedNumber(correctVal);
-        OnCellChanged?.Invoke(selected.Row, selected.Col, correctVal, true);
+        int correctVal = solutionGrid[row, col];
+        targetCell.SetFixedNumber(correctVal);
+        OnCellChanged?.Invoke(row, col, correctVal, true);
 
         // A hint doesn't pay the "correct number" score bonus (the player
         // didn't solve it themselves), but it can still complete a row/
         // column/box, so those bonuses still fire normally.
-        CheckSectionCompletion(selected.Row, selected.Col);
+        CheckSectionCompletion(row, col);
         UpdateScoreHud();
 
         UpdateCompletedNumbers();
         CheckWinCondition();
+
+        // Keep target cell selected
+        gridLayout.SelectCell(row, col);
     }
 
     private void CheckWinCondition()

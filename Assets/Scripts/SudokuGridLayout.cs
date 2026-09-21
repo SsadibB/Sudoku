@@ -190,6 +190,16 @@ public class SudokuGridLayout : MonoBehaviour
         }
     }
 
+    public void SelectCell(int row, int col)
+    {
+        if (Cells == null) return;
+        int max = BoxCount * CellCount;
+        if (row >= 0 && row < max && col >= 0 && col < max && Cells[row, col] != null)
+        {
+            HandleCellClicked(Cells[row, col]);
+        }
+    }
+
     public void ClearSelection()
     {
         if (SelectedCell != null)
