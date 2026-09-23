@@ -108,6 +108,8 @@ public class HeartManager : MonoBehaviour
     private void ResetAllHats()
     {
         if (strawHatRects == null) return;
+        if (hatStartAnchoredPositions == null) CaptureHatStartPositions();
+        if (hatStartAnchoredPositions == null) return;
 
         for (int i = 0; i < strawHatRects.Length; i++)
         {

@@ -6,34 +6,65 @@ using TMPro;
 [RequireComponent(typeof(RectTransform))]
 public class SudokuGridLayout : MonoBehaviour
 {
-    [Header("Big Grid — outer 3x3 (arranges the 9 boxes)")]
-    [SerializeField] private RectOffset bigGridPadding;
-    [SerializeField] private Vector2 bigGridCellSize = new Vector2(287f, 345f);
-    [SerializeField] private Vector2 bigGridSpacing = new Vector2(20f, 25f);
-    [SerializeField] private Color boxBorderColor = new Color(0.35f, 0.2f, 0.08f, 1f);
+    private const int BoardDimension = 9; // 9x9 grid
+    private const int BoxSize = 3;        // 3x3 grouping
 
-    [Header("Small Grid — inner 3x3 (arranges cells inside each box)")]
-    [SerializeField] private RectOffset smallGridPadding;
-    [SerializeField] private Vector2 smallGridCellSize = new Vector2(92.8f, 112f);
-    [SerializeField] private Vector2 smallGridSpacing = new Vector2(3.6f, 4f);
+    [Header("Cell Prefab")]
+    [Tooltip("Prefab for a single board cell. Must have a SudokuCell component on its root, an Image on the root (used as the cell background), a child named exactly \"Number\" with a TextMeshProUGUI, and optionally a child named exactly \"Notes\" with a TextMeshProUGUI for pencil marks.")]
+    [SerializeField] private SudokuCell cellPrefab;
+
+    [Header("Grid Layout & Padding")]
+    [Tooltip("Padding inside the Board RectTransform to keep cells safely within the dark board borders.")]
+    [SerializeField] private RectOffset boardPadding = new RectOffset(36, 36, 36, 36);
+    [Tooltip("Spacing between adjacent individual cells inside each 3x3 sub-box in pixels.")]
+    [SerializeField] private Vector2 cellSpacing = new Vector2(5f, 5f);
+
+    [Header("Sub-Box Spacing (Distance between the 9 3x3 sub-boxes)")]
+    [Tooltip("Horizontal gap between the left, middle, and right 3x3 sub-boxes.")]
+    [SerializeField] private float subBoxSpacingX = 14f;
+    [Tooltip("Vertical gap between the top, middle, and bottom 3x3 sub-boxes.")]
+    [SerializeField] private float subBoxSpacingY = 14f;
 
     [Header("Cell Appearance")]
     [SerializeField] private TMP_FontAsset cellFontAsset;
     [SerializeField] private Color cellTextColor = new Color(0.25f, 0.15f, 0.05f, 1f);
-    [SerializeField] private Color cellDefaultBgColor = new Color(1f, 1f, 1f, 0f); // transparent, board art shows through
-    [SerializeField] private Color cellSelectedBgColor = new Color(1f, 0.85f, 0.4f, 0.5f);
-    [SerializeField] private Color cellHighlightBgColor = new Color(0.5f, 0.5f, 0.5f, 0.35f); // greyish row/col/box highlight
-    [Tooltip("Fixed point size for every cell's number. Every cell always shows exactly one digit at the same cell size, so a fixed size keeps every digit rendering identically thick/bold - auto-sizing here can settle at slightly different sizes per cell, making some look bolder than others.")]
-    [SerializeField] private float cellNumberFontSize = 70f;
+    [Tooltip("Default background color for cells in even 3x3 boxes (corner boxes & center box).")]
+    [SerializeField] private Color cellDefaultBgColor = new Color(1f, 1f, 1f, 1f);
+    [Tooltip("Subtle background tint for cells in odd 3x3 boxes (edge boxes) to enhance 3x3 visual grouping.")]
+    [SerializeField] private Color cellAltBoxBgColor = new Color(0.94f, 0.95f, 0.98f, 1f);
+    [SerializeField] private Color cellSelectedBgColor = new Color(1f, 0.86f, 0.40f, 1f);
+    [SerializeField] private Color cellHighlightBgColor = new Color(0.84f, 0.88f, 0.95f, 1f);
+    [Tooltip("When enabled, cell number font size is automatically calculated from cell height.")]
+    [SerializeField] private bool autoScaleFontSize = true;
+    [Tooltip("Fixed point size fallback for every cell's number if autoScaleFontSize is disabled.")]
+    [SerializeField] private float cellNumberFontSize = 52f;
     [Tooltip("Scale applied to every cell on the board that shares the selected cell's number, for as long as that cell stays selected.")]
-    [SerializeField] private float sameNumberEnlargeScale = 1.2f;
+    [SerializeField] private float sameNumberEnlargeScale = 1.18f;
     [SerializeField] private float sameNumberEnlargeAnimDuration = 0.2f;
 
-    private const int BoxCount = 3;   // 3x3 boxes
-    private const int CellCount = 3;  // 3x3 small cells inside each box
+    [Header("3x3 Grouping Dividers")]
+    [SerializeField] private bool showDividerLines = true;
+    [SerializeField] private float dividerLineWidth = 3f;
+    [SerializeField] private Color dividerLineColor = new Color(0.18f, 0.22f, 0.28f, 1f);
 
-    private GridLayoutGroup outerGrid;
+    private GridLayoutGroup gridLayoutGroup;
     private RectTransform gridRect;
+    private RectTransform boardRect;
+    private RectTransform dividerContainer;
+    private float calculatedCellSide = 85f;
+    private float calculatedFontSize = 50f;
+
+    public float SubBoxSpacingX
+    {
+        get => subBoxSpacingX;
+        set { subBoxSpacingX = value; RecalculateLayout(); }
+    }
+
+    public float SubBoxSpacingY
+    {
+        get => subBoxSpacingY;
+        set { subBoxSpacingY = value; RecalculateLayout(); }
+    }
 
     // Indexed by global row/col, 0-8, 0-8
     public SudokuCell[,] Cells { get; private set; }
@@ -41,19 +72,227 @@ public class SudokuGridLayout : MonoBehaviour
 
     private void Awake()
     {
-        outerGrid = GetComponent<GridLayoutGroup>();
+        gridLayoutGroup = GetComponent<GridLayoutGroup>();
         gridRect = GetComponent<RectTransform>();
+        if (transform.parent != null) boardRect = transform.parent as RectTransform;
 
-        if (bigGridPadding == null) bigGridPadding = new RectOffset(0, 0, 0, 0);
-        if (smallGridPadding == null) smallGridPadding = new RectOffset(0, 0, 0, 0);
+        if (boardPadding == null) boardPadding = new RectOffset(36, 36, 36, 36);
+
+        // Safeguard against stale zero-alpha serialized color values
+        if (cellDefaultBgColor.a < 0.05f) cellDefaultBgColor = Color.white;
+        if (cellAltBoxBgColor.a < 0.05f) cellAltBoxBgColor = new Color(0.94f, 0.95f, 0.98f, 1f);
+        if (cellSelectedBgColor.a < 0.05f) cellSelectedBgColor = new Color(1f, 0.86f, 0.40f, 1f);
+        if (cellHighlightBgColor.a < 0.05f) cellHighlightBgColor = new Color(0.84f, 0.88f, 0.95f, 1f);
 
         // Built in Awake (not Start) so the grid exists before ANY other
-        // script's Start() runs. Previously this ran in Start(), which raced
-        // against SudokuGameManager.Start() -> PopulateBoard(): if the
-        // GameManager's Start() fired first, it would build + populate the
-        // board, then this Start() would fire afterward and rebuild an empty
-        // board on top of it, wiping out the fixed numbers.
+        // script's Start() runs.
         BuildBoard();
+    }
+
+    private void OnValidate()
+    {
+        if (gridRect != null && boardRect != null)
+        {
+            RecalculateLayout();
+        }
+    }
+
+    private void OnRectTransformDimensionsChange()
+    {
+        if (isActiveAndEnabled && gridRect != null && boardRect != null)
+        {
+            RecalculateLayout();
+        }
+    }
+
+    public void RecalculateLayout()
+    {
+        if (gridRect == null) gridRect = GetComponent<RectTransform>();
+        if (gridLayoutGroup == null) gridLayoutGroup = GetComponent<GridLayoutGroup>();
+        if (boardRect == null && transform.parent != null) boardRect = transform.parent as RectTransform;
+
+        if (boardRect == null) return;
+
+        if (boardPadding == null) boardPadding = new RectOffset(36, 36, 36, 36);
+
+        // Ensure Board has a RectMask2D for absolute hardware clipping
+        var mask = boardRect.GetComponent<RectMask2D>();
+        if (mask == null)
+        {
+            boardRect.gameObject.AddComponent<RectMask2D>();
+        }
+
+        // Available square area inside the Board's RectTransform
+        float availW = Mathf.Max(50f, boardRect.rect.width - (boardPadding.left + boardPadding.right));
+        float availH = Mathf.Max(50f, boardRect.rect.height - (boardPadding.top + boardPadding.bottom));
+        float availSide = Mathf.Min(availW, availH);
+
+        // 6 internal cell spacings (2 inside each of the 3 sub-boxes) + 2 sub-box spacings
+        float totalSpacingX = cellSpacing.x * 6f + subBoxSpacingX * 2f;
+        float totalSpacingY = cellSpacing.y * 6f + subBoxSpacingY * 2f;
+
+        float maxCellW = (availSide - totalSpacingX) / BoardDimension;
+        float maxCellH = (availSide - totalSpacingY) / BoardDimension;
+        calculatedCellSide = Mathf.Floor(Mathf.Min(maxCellW, maxCellH));
+        calculatedCellSide = Mathf.Max(10f, calculatedCellSide);
+
+        if (autoScaleFontSize)
+        {
+            calculatedFontSize = Mathf.Round(calculatedCellSide * 0.58f);
+        }
+        else
+        {
+            calculatedFontSize = cellNumberFontSize;
+        }
+
+        float totalGridW = calculatedCellSide * BoardDimension + totalSpacingX;
+        float totalGridH = calculatedCellSide * BoardDimension + totalSpacingY;
+
+        // Position and size Grid centered inside Board
+        gridRect.anchorMin = new Vector2(0.5f, 0.5f);
+        gridRect.anchorMax = new Vector2(0.5f, 0.5f);
+        gridRect.pivot = new Vector2(0.5f, 0.5f);
+        gridRect.anchoredPosition = Vector2.zero;
+        gridRect.sizeDelta = new Vector2(totalGridW, totalGridH);
+
+        // Keep GridLayoutGroup metadata consistent, but disable it so custom
+        // sub-box spacing positioning is used without uniform cell override
+        gridLayoutGroup.enabled = false;
+        gridLayoutGroup.cellSize = new Vector2(calculatedCellSide, calculatedCellSide);
+        gridLayoutGroup.spacing = cellSpacing;
+
+        // Position all cells with separate cell spacing and sub-box spacing
+        PositionCells(totalGridW, totalGridH);
+
+        // Update divider lines if present
+        UpdateDividerLines(totalGridW, totalGridH);
+
+        // Update font size on existing cells if already built
+        if (Cells != null)
+        {
+            for (int r = 0; r < BoardDimension; r++)
+            {
+                for (int c = 0; c < BoardDimension; c++)
+                {
+                    SudokuCell cell = Cells[r, c];
+                    if (cell != null)
+                    {
+                        var txt = cell.transform.Find("Number")?.GetComponent<TextMeshProUGUI>();
+                        if (txt != null)
+                        {
+                            txt.fontSize = calculatedFontSize;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private void PositionCells(float gridW, float gridH)
+    {
+        for (int r = 0; r < BoardDimension; r++)
+        {
+            int boxR = r / BoxSize;
+            float yFromTop = r * calculatedCellSide + (r - boxR) * cellSpacing.y + boxR * subBoxSpacingY + calculatedCellSide * 0.5f;
+            float anchoredY = gridH * 0.5f - yFromTop;
+
+            for (int c = 0; c < BoardDimension; c++)
+            {
+                RectTransform rt = null;
+                if (Cells != null && Cells[r, c] != null)
+                {
+                    rt = Cells[r, c].GetComponent<RectTransform>();
+                }
+                else
+                {
+                    Transform t = transform.Find($"Cell_{r}_{c}");
+                    if (t != null) rt = t as RectTransform;
+                }
+
+                if (rt != null)
+                {
+                    int boxC = c / BoxSize;
+                    float xFromLeft = c * calculatedCellSide + (c - boxC) * cellSpacing.x + boxC * subBoxSpacingX + calculatedCellSide * 0.5f;
+                    float anchoredX = xFromLeft - gridW * 0.5f;
+
+                    rt.anchorMin = new Vector2(0.5f, 0.5f);
+                    rt.anchorMax = new Vector2(0.5f, 0.5f);
+                    rt.pivot = new Vector2(0.5f, 0.5f);
+                    rt.sizeDelta = new Vector2(calculatedCellSide, calculatedCellSide);
+                    rt.anchoredPosition = new Vector2(anchoredX, anchoredY);
+                }
+            }
+        }
+    }
+
+    private void UpdateDividerLines(float gridW, float gridH)
+    {
+        if (!showDividerLines || boardRect == null)
+        {
+            if (dividerContainer != null) dividerContainer.gameObject.SetActive(false);
+            return;
+        }
+
+        if (dividerContainer == null)
+        {
+            Transform existing = boardRect.Find("DividerLines");
+            if (existing != null)
+            {
+                dividerContainer = existing as RectTransform;
+            }
+            else
+            {
+                GameObject divGO = new GameObject("DividerLines", typeof(RectTransform));
+                divGO.transform.SetParent(boardRect, false);
+                divGO.transform.SetSiblingIndex(gridRect.GetSiblingIndex() + 1);
+                dividerContainer = divGO.GetComponent<RectTransform>();
+            }
+        }
+
+        dividerContainer.gameObject.SetActive(true);
+        dividerContainer.anchorMin = new Vector2(0.5f, 0.5f);
+        dividerContainer.anchorMax = new Vector2(0.5f, 0.5f);
+        dividerContainer.pivot = new Vector2(0.5f, 0.5f);
+        dividerContainer.anchoredPosition = Vector2.zero;
+        dividerContainer.sizeDelta = new Vector2(gridW, gridH);
+
+        // Gap centers between cols 2&3 and cols 5&6:
+        float x1 = 3 * calculatedCellSide + 2 * cellSpacing.x + subBoxSpacingX * 0.5f - gridW * 0.5f;
+        float x2 = 6 * calculatedCellSide + 4 * cellSpacing.x + 1.5f * subBoxSpacingX - gridW * 0.5f;
+        // Gap centers between rows 2&3 and rows 5&6:
+        float y1 = gridH * 0.5f - (3 * calculatedCellSide + 2 * cellSpacing.y + subBoxSpacingY * 0.5f);
+        float y2 = gridH * 0.5f - (6 * calculatedCellSide + 4 * cellSpacing.y + 1.5f * subBoxSpacingY);
+
+        SetupLine("Line_V1", new Vector2(x1, 0), new Vector2(dividerLineWidth, gridH));
+        SetupLine("Line_V2", new Vector2(x2, 0), new Vector2(dividerLineWidth, gridH));
+        SetupLine("Line_H1", new Vector2(0, y1), new Vector2(gridW, dividerLineWidth));
+        SetupLine("Line_H2", new Vector2(0, y2), new Vector2(gridW, dividerLineWidth));
+    }
+
+    private void SetupLine(string lineName, Vector2 pos, Vector2 size)
+    {
+        Transform t = dividerContainer.Find(lineName);
+        GameObject go;
+        if (t == null)
+        {
+            go = new GameObject(lineName, typeof(RectTransform), typeof(Image));
+            go.transform.SetParent(dividerContainer, false);
+        }
+        else
+        {
+            go = t.gameObject;
+        }
+
+        RectTransform rt = go.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 0.5f);
+        rt.anchorMax = new Vector2(0.5f, 0.5f);
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = pos;
+        rt.sizeDelta = size;
+
+        Image img = go.GetComponent<Image>();
+        img.color = dividerLineColor;
+        img.raycastTarget = false;
     }
 
     private void BuildBoard()
@@ -62,108 +301,102 @@ public class SudokuGridLayout : MonoBehaviour
         for (int i = transform.childCount - 1; i >= 0; i--)
             Destroy(transform.GetChild(i).gameObject);
 
-        Cells = new SudokuCell[BoxCount * CellCount, BoxCount * CellCount];
-
-        outerGrid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-        outerGrid.constraintCount = BoxCount;
-        outerGrid.padding = bigGridPadding;
-        outerGrid.spacing = bigGridSpacing;
-        outerGrid.cellSize = bigGridCellSize;
-
-        for (int boxRow = 0; boxRow < BoxCount; boxRow++)
+        // Clear existing divider lines to prevent duplicates
+        if (boardRect != null)
         {
-            for (int boxCol = 0; boxCol < BoxCount; boxCol++)
+            Transform existingLines = boardRect.Find("DividerLines");
+            if (existingLines != null)
             {
-                CreateBox(boxRow, boxCol);
+                Destroy(existingLines.gameObject);
+                dividerContainer = null;
             }
         }
-    }
 
-    private void CreateBox(int boxRow, int boxCol)
-    {
-        GameObject boxGO = new GameObject($"Box_{boxRow}_{boxCol}", typeof(RectTransform));
-        boxGO.transform.SetParent(transform, false);
+        RecalculateLayout();
 
-        // This background shows through as the border between boxes,
-        // since the inner grid is padded/spaced inward from this image's edges.
-        Image boxBg = boxGO.AddComponent<Image>();
-        boxBg.color = boxBorderColor;
+        Cells = new SudokuCell[BoardDimension, BoardDimension];
 
-        GridLayoutGroup innerGrid = boxGO.AddComponent<GridLayoutGroup>();
-        innerGrid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
-        innerGrid.constraintCount = CellCount;
-        innerGrid.padding = smallGridPadding;
-        innerGrid.spacing = smallGridSpacing;
-        innerGrid.cellSize = smallGridCellSize;
-
-        for (int r = 0; r < CellCount; r++)
+        for (int r = 0; r < BoardDimension; r++)
         {
-            for (int c = 0; c < CellCount; c++)
+            for (int c = 0; c < BoardDimension; c++)
             {
-                int globalRow = boxRow * CellCount + r;
-                int globalCol = boxCol * CellCount + c;
-                Cells[globalRow, globalCol] = CreateCell(boxGO.transform, globalRow, globalCol);
+                Cells[r, c] = CreateCell(r, c);
             }
         }
+
+        // Apply exact positions for all 81 instantiated cells
+        float totalSpacingX = cellSpacing.x * 6f + subBoxSpacingX * 2f;
+        float totalSpacingY = cellSpacing.y * 6f + subBoxSpacingY * 2f;
+        float totalGridW = calculatedCellSide * BoardDimension + totalSpacingX;
+        float totalGridH = calculatedCellSide * BoardDimension + totalSpacingY;
+        PositionCells(totalGridW, totalGridH);
     }
 
-    private SudokuCell CreateCell(Transform parent, int globalRow, int globalCol)
+    private SudokuCell CreateCell(int globalRow, int globalCol)
     {
-        GameObject cellGO = new GameObject($"Cell_{globalRow}_{globalCol}", typeof(RectTransform));
-        cellGO.transform.SetParent(parent, false);
+        if (cellPrefab == null)
+        {
+            Debug.LogError("SudokuGridLayout: no Cell Prefab assigned in the Inspector.", this);
+            return null;
+        }
 
-        Image bgImage = cellGO.AddComponent<Image>();
-        bgImage.color = cellDefaultBgColor;
+        SudokuCell cell = Instantiate(cellPrefab, transform);
+        cell.name = $"Cell_{globalRow}_{globalCol}";
+        cell.transform.localScale = Vector3.one;
 
-        Button button = cellGO.AddComponent<Button>();
-        ColorBlock colors = button.colors;
-        colors.normalColor = Color.white;
-        colors.highlightedColor = new Color(1f, 1f, 1f, 0.9f);
-        colors.pressedColor = new Color(0.9f, 0.9f, 0.9f, 1f);
-        button.colors = colors;
+        Image bgImage = cell.GetComponent<Image>();
+        Button button = cell.GetComponent<Button>();
 
-        GameObject textGO = new GameObject("Number", typeof(RectTransform));
-        textGO.transform.SetParent(cellGO.transform, false);
+        if (bgImage != null)
+        {
+            bgImage.enabled = true;
+        }
 
-        RectTransform textRect = textGO.GetComponent<RectTransform>();
-        textRect.anchorMin = Vector2.zero;
-        textRect.anchorMax = Vector2.one;
-        textRect.offsetMin = Vector2.zero;
-        textRect.offsetMax = Vector2.zero;
+        if (button != null)
+        {
+            button.interactable = true;
+        }
 
-        TextMeshProUGUI numberText = textGO.AddComponent<TextMeshProUGUI>();
-        numberText.alignment = TextAlignmentOptions.Center;
-        numberText.color = cellTextColor;
-        numberText.enableAutoSizing = false;
-        numberText.fontSize = cellNumberFontSize;
-        numberText.text = "";
-        if (cellFontAsset != null) numberText.font = cellFontAsset;
+        int boxRow = globalRow / BoxSize;
+        int boxCol = globalCol / BoxSize;
+        bool isAltBox = (boxRow + boxCol) % 2 != 0;
+        Color defaultBg = isAltBox ? cellAltBoxBgColor : cellDefaultBgColor;
 
-        // Small pencil-mark notes grid (3x3: 1 2 3 / 4 5 6 / 7 8 9), sits
-        // behind/alongside the main number and is only shown when the cell
-        // is empty and has at least one note toggled on.
-        GameObject notesGO = new GameObject("Notes", typeof(RectTransform));
-        notesGO.transform.SetParent(cellGO.transform, false);
+        // Expected child names on the prefab: "Number" (always present) and
+        // "Notes" (optional — pencil-mark 3x3 mini grid, hidden by default).
+        TextMeshProUGUI numberText = cell.transform.Find("Number")?.GetComponent<TextMeshProUGUI>();
+        TextMeshProUGUI notesText = cell.transform.Find("Notes")?.GetComponent<TextMeshProUGUI>();
 
-        RectTransform notesRect = notesGO.GetComponent<RectTransform>();
-        notesRect.anchorMin = Vector2.zero;
-        notesRect.anchorMax = Vector2.one;
-        notesRect.offsetMin = Vector2.zero;
-        notesRect.offsetMax = Vector2.zero;
+        if (numberText == null)
+            Debug.LogError($"SudokuGridLayout: cell prefab is missing a child named \"Number\" with a TextMeshProUGUI.", cell);
 
-        TextMeshProUGUI notesText = notesGO.AddComponent<TextMeshProUGUI>();
-        notesText.alignment = TextAlignmentOptions.Center;
-        notesText.color = new Color(cellTextColor.r, cellTextColor.g, cellTextColor.b, 0.65f);
-        notesText.enableAutoSizing = true;
-        notesText.fontSizeMin = 6f;
-        notesText.fontSizeMax = 32f;
-        notesText.lineSpacing = -18f;
-        notesText.text = "";
-        notesText.gameObject.SetActive(false);
-        if (cellFontAsset != null) notesText.font = cellFontAsset;
+        if (numberText != null)
+        {
+            RectTransform numRect = numberText.rectTransform;
+            numRect.anchorMin = Vector2.zero;
+            numRect.anchorMax = Vector2.one;
+            numRect.pivot = new Vector2(0.5f, 0.5f);
+            numRect.anchoredPosition = Vector2.zero;
+            numRect.sizeDelta = Vector2.zero;
+            numRect.localScale = Vector3.one;
 
-        SudokuCell cell = cellGO.AddComponent<SudokuCell>();
-        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, cellDefaultBgColor, cellSelectedBgColor, cellTextColor, notesText, cellHighlightBgColor);
+            numberText.raycastTarget = false;
+            numberText.enableAutoSizing = false;
+            numberText.fontSize = calculatedFontSize;
+            numberText.text = "";
+            numberText.alignment = TextAlignmentOptions.Center;
+            numberText.color = cellTextColor;
+            if (cellFontAsset != null) numberText.font = cellFontAsset;
+        }
+
+        if (notesText != null)
+        {
+            notesText.text = "";
+            notesText.gameObject.SetActive(false);
+            if (cellFontAsset != null) notesText.font = cellFontAsset;
+        }
+
+        cell.Initialize(globalRow, globalCol, button, bgImage, numberText, defaultBg, cellSelectedBgColor, cellTextColor, notesText, cellHighlightBgColor);
         cell.OnCellClicked += HandleCellClicked;
 
         return cell;
@@ -173,9 +406,9 @@ public class SudokuGridLayout : MonoBehaviour
     {
         if (Cells == null) BuildBoard();
 
-        for (int r = 0; r < BoxCount * CellCount; r++)
+        for (int r = 0; r < BoardDimension; r++)
         {
-            for (int c = 0; c < BoxCount * CellCount; c++)
+            for (int c = 0; c < BoardDimension; c++)
             {
                 int val = puzzle[r, c];
                 if (val != 0)
@@ -193,8 +426,7 @@ public class SudokuGridLayout : MonoBehaviour
     public void SelectCell(int row, int col)
     {
         if (Cells == null) return;
-        int max = BoxCount * CellCount;
-        if (row >= 0 && row < max && col >= 0 && col < max && Cells[row, col] != null)
+        if (row >= 0 && row < BoardDimension && col >= 0 && col < BoardDimension && Cells[row, col] != null)
         {
             HandleCellClicked(Cells[row, col]);
         }
@@ -231,13 +463,13 @@ public class SudokuGridLayout : MonoBehaviour
     {
         if (Cells == null) return;
 
-        int boxRowStart = (selected.Row / CellCount) * CellCount;
-        int boxColStart = (selected.Col / CellCount) * CellCount;
+        int boxRowStart = (selected.Row / BoxSize) * BoxSize;
+        int boxColStart = (selected.Col / BoxSize) * BoxSize;
         int selectedNumber = selected.GetNumber();
 
-        for (int r = 0; r < BoxCount * CellCount; r++)
+        for (int r = 0; r < BoardDimension; r++)
         {
-            for (int c = 0; c < BoxCount * CellCount; c++)
+            for (int c = 0; c < BoardDimension; c++)
             {
                 SudokuCell cell = Cells[r, c];
                 if (cell == null) continue;
@@ -253,8 +485,8 @@ public class SudokuGridLayout : MonoBehaviour
 
                 bool sameRow = r == selected.Row;
                 bool sameCol = c == selected.Col;
-                bool sameBox = r >= boxRowStart && r < boxRowStart + CellCount &&
-                               c >= boxColStart && c < boxColStart + CellCount;
+                bool sameBox = r >= boxRowStart && r < boxRowStart + BoxSize &&
+                               c >= boxColStart && c < boxColStart + BoxSize;
 
                 cell.SetHighlighted(sameRow || sameCol || sameBox);
             }
