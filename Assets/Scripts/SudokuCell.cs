@@ -82,6 +82,16 @@ public class SudokuCell : MonoBehaviour
             }
         }
 
+        // Bare prefab fallback: if the prefab defines no notes UI at all
+        // (no "Notes" child, no Note_1..Note_9 children — just Image +
+        // Button + Number, as our cell prefab actually looks like), build
+        // a lightweight notes label at runtime so pencil marks still show
+        // up without having to hand-author a Notes child in every prefab.
+        if (notesRoot == null && notesText == null)
+        {
+            CreateFallbackNotesText();
+        }
+
         ClearNotes();
     }
 
@@ -219,6 +229,41 @@ public class SudokuCell : MonoBehaviour
     }
 
     // ---------------- Pencil-mark Notes ----------------
+
+    // Creates a "Notes" text object under this cell purely in code, sized
+    // to fill the cell (same rect as Number) and rendered in Mode 2 (the
+    // single-TMP 3x3 pencil-mark grid from RefreshNotesDisplay). This is
+    // what lets notes work on a cell prefab that only has Image + Button +
+    // Number — no manual prefab edits needed.
+    private void CreateFallbackNotesText()
+    {
+        GameObject go = new GameObject("Notes (Auto)", typeof(RectTransform));
+        RectTransform rt = go.GetComponent<RectTransform>();
+        rt.SetParent(transform, false);
+        rt.anchorMin = Vector2.zero;
+        rt.anchorMax = Vector2.one;
+        rt.pivot = new Vector2(0.5f, 0.5f);
+        rt.anchoredPosition = Vector2.zero;
+        rt.sizeDelta = Vector2.zero;
+        rt.localScale = Vector3.one;
+        // First child, so it renders underneath the Number text.
+        rt.SetSiblingIndex(0);
+
+        TextMeshProUGUI tmp = go.AddComponent<TextMeshProUGUI>();
+        tmp.raycastTarget = false;
+        tmp.alignment = TextAlignmentOptions.Center;
+        tmp.enableAutoSizing = true;
+        tmp.fontSizeMin = 4f;
+        // Notes are a 3x3 grid of digits sharing one cell, so cap them
+        // well under the full number size.
+        tmp.fontSizeMax = numberText != null ? numberText.fontSize * 0.42f : 18f;
+        tmp.color = new Color(fixedTextColor.r, fixedTextColor.g, fixedTextColor.b, 0.7f);
+        if (numberText != null && numberText.font != null) tmp.font = numberText.font;
+        tmp.text = "";
+        tmp.gameObject.SetActive(false);
+
+        notesText = tmp;
+    }
 
     public void ToggleNote(int number)
     {

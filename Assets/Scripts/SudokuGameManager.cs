@@ -212,6 +212,7 @@ public class SudokuGameManager : MonoBehaviour
     private void Start()
     {
         RegisterListeners();
+        WarnAboutUnassignedReferences();
 
         // Load difficulty set from Main Menu, default to Easy
         string prefDiff = PlayerPrefs.GetString(UIManager.DifficultyPrefKey, "Easy");
@@ -254,7 +255,7 @@ public class SudokuGameManager : MonoBehaviour
         if (!isGameActive) return;
 
         if (hudTimeText != null)
-            hudTimeText.text = $"Time:{FormatElapsedTime(Time.time - levelStartTime)}";
+            hudTimeText.text = FormatElapsedTime(Time.time - levelStartTime);
 
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null) return; // no keyboard device connected (e.g. mobile)
@@ -276,6 +277,31 @@ public class SudokuGameManager : MonoBehaviour
         {
             OnEraseClicked();
         }
+    }
+
+    // Fields that fail SILENTLY when left unassigned in the Inspector — the
+    // rest of the script guards every use with "if (x != null)" so nothing
+    // crashes, but the feature just quietly does nothing (e.g. Level text
+    // never updates, or Back skips the confirmation dialog). Logs a warning
+    // per missing field once at startup so a forgotten hookup shows up in
+    // the Console instead of looking like a script bug.
+    private void WarnAboutUnassignedReferences()
+    {
+        if (levelHeaderText == null)
+            Debug.LogWarning("SudokuGameManager: 'Level Header Text' is not assigned in the Inspector — the on-screen level number will never update.", this);
+
+        if (restartConfirmationPanel == null)
+            Debug.LogWarning("SudokuGameManager: 'Restart Confirmation Panel' is not assigned in the Inspector — Back and Restart will skip the confirmation dialog and act immediately.", this);
+        else
+        {
+            if (restartConfirmYesButton == null)
+                Debug.LogWarning("SudokuGameManager: 'Restart Confirm Yes Button' is not assigned — the confirmation dialog's Yes button won't do anything.", this);
+            if (restartConfirmNoButton == null)
+                Debug.LogWarning("SudokuGameManager: 'Restart Confirm No Button' is not assigned — the confirmation dialog's No button won't do anything.", this);
+        }
+
+        if (backButton == null)
+            Debug.LogWarning("SudokuGameManager: 'Back Button' is not assigned — the in-game Back button won't respond to taps.", this);
     }
 
     private void RegisterListeners()
@@ -382,6 +408,7 @@ public class SudokuGameManager : MonoBehaviour
     {
         currentDifficulty = difficulty;
         currentLevel = Mathf.Clamp(level, 1, LevelManager.MaxLevel);
+        Debug.Log($"[SudokuGameManager] StartNewGame: difficulty={currentDifficulty}, requestedLevel={level}, currentLevel={currentLevel}, highestCompleted={(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
         undoStack.Clear();
         ResetScoreAwardTracking();
 
@@ -401,9 +428,9 @@ public class SudokuGameManager : MonoBehaviour
             UpdateHintBadge();
         }
 
-        if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
+        if (hudScoreText != null) hudScoreText.text = sessionScore.ToString();
         OnScoreChanged?.Invoke(sessionScore);
-        if (hudTimeText != null) hudTimeText.text = $"Time:{FormatElapsedTime(0f)}";
+        if (hudTimeText != null) hudTimeText.text = FormatElapsedTime(0f);
 
         (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty, currentLevel);
 
@@ -921,7 +948,9 @@ public class SudokuGameManager : MonoBehaviour
         sessionScore += scorePerBoardComplete;
         UpdateScoreHud();
         ProfileManager.Instance?.AddXP(GetProfileXPForDifficulty(currentDifficulty));
+        Debug.Log($"[SudokuGameManager] Victory on {currentDifficulty} Level {currentLevel}. Highest completed before unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
         LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
+        Debug.Log($"[SudokuGameManager] Highest completed after unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
         ProfileManager.Instance?.RecordVictory(currentDifficulty, sessionScore);
 
         // ---- Multiplayer hook ----
@@ -1112,7 +1141,7 @@ public class SudokuGameManager : MonoBehaviour
     // Call any time sessionScore changes, to keep the live HUD in sync.
     private void UpdateScoreHud()
     {
-        if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
+        if (hudScoreText != null) hudScoreText.text = sessionScore.ToString();
         OnScoreChanged?.Invoke(sessionScore);
     }
 

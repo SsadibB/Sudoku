@@ -8,9 +8,6 @@ TextureImporter:
   - first:
       213: 5925428809978282176
     second: SoundOff_1
-  - first:
-      213: -7396004514469405785
-    second: SoundOff_2
   externalObjects: {}
   serializedVersion: 13
   mipmaps:
@@ -123,9 +120,9 @@ TextureImporter:
       rect:
         serializedVersion: 2
         x: 0
-        y: 19
-        width: 60
-        height: 56
+        y: 16
+        width: 94
+        height: 82
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -146,8 +143,8 @@ TextureImporter:
         serializedVersion: 2
         x: 11
         y: 0
-        width: 83
-        height: 81
+        width: 89
+        height: 83
       alignment: 0
       pivot: {x: 0, y: 0}
       border: {x: 0, y: 0, z: 0, w: 0}
@@ -158,28 +155,6 @@ TextureImporter:
       bones: []
       spriteID: 0c00f90cb1a5b3250800000000000000
       internalID: 5925428809978282176
-      vertices: []
-      indices: 
-      edges: []
-      weights: []
-    - serializedVersion: 2
-      name: SoundOff_2
-      rect:
-        serializedVersion: 2
-        x: 62
-        y: 1
-        width: 38
-        height: 64
-      alignment: 0
-      pivot: {x: 0, y: 0}
-      border: {x: 0, y: 0, z: 0, w: 0}
-      customData: 
-      outline: []
-      physicsShape: []
-      tessellationDetail: -1
-      bones: []
-      spriteID: 7ab9ddd641d1c5990800000000000000
-      internalID: -7396004514469405785
       vertices: []
       indices: 
       edges: []
@@ -200,7 +175,6 @@ TextureImporter:
     nameFileIdTable:
       SoundOff_0: 5660104166885646579
       SoundOff_1: 5925428809978282176
-      SoundOff_2: -7396004514469405785
   mipmapLimitGroupName: 
   pSDRemoveMatte: 0
   userData: 

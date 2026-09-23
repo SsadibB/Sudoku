@@ -15,7 +15,7 @@ public class SudokuGridLayout : MonoBehaviour
 
     [Header("Grid Layout & Padding")]
     [Tooltip("Padding inside the Board RectTransform to keep cells safely within the dark board borders.")]
-    [SerializeField] private RectOffset boardPadding = new RectOffset(36, 36, 36, 36);
+    [SerializeField] private RectOffset boardPadding;
     [Tooltip("Spacing between adjacent individual cells inside each 3x3 sub-box in pixels.")]
     [SerializeField] private Vector2 cellSpacing = new Vector2(5f, 5f);
 
