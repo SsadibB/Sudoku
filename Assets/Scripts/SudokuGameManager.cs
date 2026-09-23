@@ -73,6 +73,17 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private Button notesButton;
     [SerializeField] private Button hintButton;
 
+    [Header("Hint System")]
+    [Tooltip("OFF (default) = Mode A: 1 rewarded ad gives 1 instant hint on selected cell, badge hidden.\nON = Mode B: badge visible, watching ad adds +3 hints; each click uses 1 hint and reveals the cell.")]
+    [SerializeField] private bool useHintPackSystem = false;
+    [Tooltip("The HintCount child GameObject under HINT button (contains the badge image + count text).")]
+    [SerializeField] private GameObject hintCountBadge;
+    [Tooltip("TMP text inside HintCount that shows the available hint count (Mode B only).")]
+    [SerializeField] private TMPro.TMP_Text hintCountText;
+
+    // Available hints in Mode B (pack system).
+    private int availableHintPackCount = 0;
+
     [Header("Difficulty Modal / Selection Panel in GameScene (Optional)")]
     [SerializeField] private GameObject difficultySelectionPanel;
     [SerializeField] private Button easyPosterBtn;
@@ -299,6 +310,17 @@ public class SudokuGameManager : MonoBehaviour
         if (hintButton != null) hintButton.onClick.AddListener(OnHintClicked);
         if (notesButton != null) notesButton.onClick.AddListener(OnNotesToggleClicked);
 
+        // ---- Hint system setup ----
+        if (useHintPackSystem)
+        {
+            if (hintCountBadge != null) hintCountBadge.SetActive(true);
+            UpdateHintBadge();
+        }
+        else
+        {
+            if (hintCountBadge != null) hintCountBadge.SetActive(false);
+        }
+
         RewardedAdManager.EnsureInstance();
 
         // Output Panel Restart Button
@@ -371,6 +393,13 @@ public class SudokuGameManager : MonoBehaviour
         sessionScore = 0;
         levelStartTime = Time.time;
         levelElapsedSeconds = 0f;
+
+        // Reset hint pack counter in Mode B
+        if (useHintPackSystem)
+        {
+            availableHintPackCount = 0;
+            UpdateHintBadge();
+        }
 
         if (hudScoreText != null) hudScoreText.text = $"Score: {sessionScore}";
         OnScoreChanged?.Invoke(sessionScore);
@@ -740,6 +769,59 @@ public class SudokuGameManager : MonoBehaviour
             return;
         }
 
+        // ---- MODE B: Hint Pack System ----
+        if (useHintPackSystem)
+        {
+            if (availableHintPackCount > 0)
+            {
+                // Use one hint from the pack immediately
+                availableHintPackCount--;
+                UpdateHintBadge();
+                RevealHintAt(selected.Row, selected.Col);
+            }
+            else
+            {
+                // No hints in pack — watch ad to earn 3
+                isHintProcessing = true;
+                if (hintButton != null) hintButton.interactable = false;
+
+                RewardedAdManager.EnsureInstance();
+
+                if (!RewardedAdManager.Instance.IsAdAvailable())
+                {
+                    UIToast.Show("Ad is not available right now. Please try again.");
+                    RewardedAdManager.Instance.LoadRewardedAd();
+                    isHintProcessing = false;
+                    if (hintButton != null) hintButton.interactable = true;
+                    return;
+                }
+
+                bool rewardEarned = false;
+                RewardedAdManager.Instance.ShowRewardedAd(
+                    onUserEarnedReward: () => { rewardEarned = true; },
+                    onAdClosed: () =>
+                    {
+                        if (rewardEarned)
+                        {
+                            availableHintPackCount += 3;
+                            UpdateHintBadge();
+                            UIToast.Show("You earned 3 hints!");
+                        }
+                        isHintProcessing = false;
+                        if (hintButton != null) hintButton.interactable = true;
+                    },
+                    onAdFailedToShow: () =>
+                    {
+                        UIToast.Show("Ad is not available right now. Please try again.");
+                        isHintProcessing = false;
+                        if (hintButton != null) hintButton.interactable = true;
+                    }
+                );
+            }
+            return;
+        }
+
+        // ---- MODE A: 1 ad = 1 instant hint ----
         // Save selected cell coordinates
         pendingHintRow = selected.Row;
         pendingHintCol = selected.Col;
@@ -759,16 +841,13 @@ public class SudokuGameManager : MonoBehaviour
             return;
         }
 
-        bool rewardEarned = false;
+        bool modeARewardEarned = false;
 
         RewardedAdManager.Instance.ShowRewardedAd(
-            onUserEarnedReward: () =>
-            {
-                rewardEarned = true;
-            },
+            onUserEarnedReward: () => { modeARewardEarned = true; },
             onAdClosed: () =>
             {
-                if (rewardEarned)
+                if (modeARewardEarned)
                 {
                     RevealHintAt(pendingHintRow, pendingHintCol);
                 }
@@ -782,6 +861,13 @@ public class SudokuGameManager : MonoBehaviour
                 if (hintButton != null) hintButton.interactable = true;
             }
         );
+    }
+
+    // Updates the hint count badge text with the current availableHintPackCount.
+    private void UpdateHintBadge()
+    {
+        if (hintCountText != null) hintCountText.text = availableHintPackCount.ToString();
+        if (hintCountBadge != null) hintCountBadge.SetActive(useHintPackSystem);
     }
 
     public void RevealHintAt(int row, int col)
@@ -995,18 +1081,15 @@ public class SudokuGameManager : MonoBehaviour
         if (sprites[chosen] != null) avatarImage.sprite = sprites[chosen];
     }
 
-    // Star rating is based on hearts remaining at the moment of victory:
-    // full 3 hearts (6 half-hearts) -> 3 stars, down to 1 star minimum on
-    // any win. Earned stars stay active; the rest are deactivated.
+    // Star rating based on lives remaining at the moment of victory:
+    // 3 lives -> 3 stars, 2 lives -> 2 stars, 1 or less -> 1 star minimum on any win.
+    // Earned stars stay active; the rest are deactivated.
     private void UpdateStars()
     {
         if (starObjects == null || starObjects.Length == 0) return;
 
-        int halfHearts = heartManager != null ? heartManager.CurrentHalfHearts : HeartManager.MaxHalfHearts;
-        int earned;
-        if (halfHearts >= 6) earned = 3;
-        else if (halfHearts >= 4) earned = 2;
-        else earned = 1;
+        int lives = heartManager != null ? heartManager.CurrentLives : HeartManager.MaxLives;
+        int earned = Mathf.Max(1, Mathf.Min(lives, 3));
 
         for (int i = 0; i < starObjects.Length; i++)
         {

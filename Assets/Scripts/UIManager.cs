@@ -12,6 +12,10 @@ public class UIManager : MonoBehaviour
 
     public enum Difficulty { Easy, Medium, Hard }
 
+    [Header("Main Menu Root")]
+    [Tooltip("The entire MainMenu container GameObject (Canvas/MainMenu), containing logo, play, setting buttons, description.")]
+    [SerializeField] private GameObject mainMenuPanel;
+
     [Header("Main Menu Buttons")]
     [SerializeField] private Button playButton;
     [SerializeField] private RectTransform playButtonText;
@@ -20,12 +24,46 @@ public class UIManager : MonoBehaviour
     [Tooltip("Same GameObject wired into ProfileManager's own 'Profile Icon Button' field — this reference only controls when it's shown; ProfileManager still owns the click behavior.")]
     [SerializeField] private Button profileIconButton;
 
+    [Header("Main Menu - Quick Settings Buttons")]
+    [SerializeField] private Button menuSoundButton;
+    [SerializeField] private GameObject menuSoundOn;
+    [SerializeField] private GameObject menuSoundOff;
+    [SerializeField] private Button menuMusicButton;
+    [SerializeField] private GameObject menuMusicOn;
+    [SerializeField] private GameObject menuMusicOff;
+    [SerializeField] private Button menuVibrationButton;
+    [SerializeField] private GameObject menuVibrationOn;
+    [SerializeField] private GameObject menuVibrationOff;
+
     [Header("Difficulty Panel")]
     [SerializeField] private GameObject difficultyPanel;
     [SerializeField] private Button backButton;
+    [SerializeField] private Button difficultySettingsButton;
+
+    [Header("Difficulty Panel - Sub-panels")]
+    [Tooltip("The SelectModePanel shown inside Difficulty (choose Single/Multi).")]
+    [SerializeField] private GameObject selectModePanel;
+    [Tooltip("The Difficulties panel shown inside Difficulty.")]
+    [SerializeField] private GameObject difficultiesPanel;
+
+    [Header("Difficulty Selection State Colors")]
+    [Tooltip("Grayish/inactive color applied to Difficulties panel elements when disabled.")]
+    [SerializeField] private Color difficultyInactiveColor = new Color(0.55f, 0.55f, 0.55f, 0.7f);
+    [Tooltip("Normal active color applied to Difficulties panel elements when Single Player is selected.")]
+    [SerializeField] private Color difficultyActiveColor = Color.white;
+
+    [Header("Difficulty Panel - Start Button")]
+    [SerializeField] private Button startButton;
+    [SerializeField] private TMP_Text startButtonText;
+    [Tooltip("Color applied to the Start button image while no difficulty is selected yet.")]
+    [SerializeField] private Color startButtonInactiveColor = new Color(0.5f, 0.5f, 0.5f, 1f);
+    [Tooltip("Color applied to the Start button image once a difficulty is selected.")]
+    [SerializeField] private Color startButtonActiveColor = Color.white;
+    [SerializeField] private Color startDisabledTextColor = new Color(0.267f, 0.161f, 0.059f, 0.45f);
+    [SerializeField] private Color startActiveTextColor = new Color(0.267f, 0.161f, 0.059f, 1.0f);
 
     [Header("Difficulty Panel - Mode Selection")]
-    [Tooltip("SinglePlayer is the only playable mode right now. Shown together with the difficulty posters, not gating them.")]
+    [Tooltip("SinglePlayer button inside SelectModePanel.")]
     [SerializeField] private Button singlePlayerButton;
     [Tooltip("Opens the Multiplayer lobby panel (International + Competition).")]
     [SerializeField] private Button multiPlayerButton;
@@ -86,6 +124,18 @@ public class UIManager : MonoBehaviour
     // booting into the main menu buttons.
     public const string OpenDifficultyOnLoadKey = "OpenDifficultyOnLoad";
 
+    private const string VibrationPrefKey = "VibrationEnabled";
+    private bool isVibrationOn = true;
+    private bool isSinglePlayerSelected = false;
+    private readonly List<Graphic> difficultyGraphics = new List<Graphic>();
+
+    // Tracks which sub-panel stage we're on inside the Difficulty panel.
+    private enum DifficultyStage { None, ModeSelection, DifficultySelection }
+    private DifficultyStage currentDifficultyStage = DifficultyStage.None;
+
+    // The difficulty chosen in the current session (null until one is selected).
+    private Difficulty? selectedDifficulty;
+
     // Shared Sound Library ID lookups, so this class and SudokuGameManager
     // always agree on which SFX/music ID goes with which difficulty.
     public static string GetDifficultyButtonSfxId(Difficulty difficulty)
@@ -113,6 +163,7 @@ public class UIManager : MonoBehaviour
     private Tween playButtonPulseTween;
     private Sequence difficultyPanelSequence;
     private Sequence settingsPanelSequence;
+    private Sequence subPanelSequence;
 
     private bool isMusicOn = true;
     private bool isSfxOn = true;
@@ -180,11 +231,32 @@ public class UIManager : MonoBehaviour
         // back up already open with no way to dismiss it.
         ProfileManager.Instance?.ForceClosePanel();
 
-        // Make sure panel starts hidden and scaled down (in case it was left active in editor)
+        // Auto-recover references if not assigned
+        if (mainMenuPanel == null)
+            mainMenuPanel = GameObject.Find("Canvas/MainMenu");
+        if (difficultyPanel == null)
+            difficultyPanel = GameObject.Find("Canvas/Difficulty");
+        if (selectModePanel == null && difficultyPanel != null)
+            selectModePanel = difficultyPanel.transform.Find("SelectModePanel")?.gameObject;
+        if (difficultiesPanel == null && difficultyPanel != null)
+            difficultiesPanel = difficultyPanel.transform.Find("Difficulties")?.gameObject;
+        if (startButton == null && difficultyPanel != null)
+            startButton = difficultyPanel.transform.Find("StartButton")?.GetComponent<Button>();
+        if (playButton == null && mainMenuPanel != null)
+            playButton = mainMenuPanel.transform.Find("play")?.GetComponent<Button>();
+
+        // Make sure Difficulty starts hidden and scaled to one
         if (difficultyPanel != null)
         {
             difficultyPanel.transform.localScale = Vector3.one;
             difficultyPanel.SetActive(false);
+            CanvasGroup diffCg = difficultyPanel.GetComponent<CanvasGroup>();
+            if (diffCg != null)
+            {
+                diffCg.alpha = 1f;
+                diffCg.interactable = true;
+                diffCg.blocksRaycasts = true;
+            }
         }
 
         if (settingsPanel != null)
@@ -198,7 +270,10 @@ public class UIManager : MonoBehaviour
 
         SetupLanguageDropdown();
         SyncLanguageLabel();
-        SyncToggleVisualsFromSoundManager();
+
+        isVibrationOn = PlayerPrefs.GetInt(VibrationPrefKey, 1) == 1;
+        CacheDifficultyGraphics();
+        SyncAllToggleVisuals();
 
         // ---- NEW: Currency / Profile Display ----
         RefreshCoinsDisplay(CoinManager.Instance != null ? CoinManager.Instance.TotalCoins : 0);
@@ -221,15 +296,30 @@ public class UIManager : MonoBehaviour
 
             // Skip the main menu buttons entirely and open straight into
             // the difficulty panel, mirroring what OnPlayClicked() does.
+            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
             if (settingsButton != null) settingsButton.gameObject.SetActive(false);
             if (aboutButton != null) aboutButton.gameObject.SetActive(false);
             if (playButton != null) playButton.gameObject.SetActive(false);
             if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
 
-            ShowDifficultyPanel();
+            ShowDifficultyPanel(instant: true);
         }
         else
         {
+            if (mainMenuPanel != null)
+            {
+                mainMenuPanel.SetActive(true);
+                mainMenuPanel.transform.localScale = Vector3.one;
+                CanvasGroup mmCg = GetOrAddCanvasGroup(mainMenuPanel);
+                mmCg.alpha = 1f;
+                mmCg.interactable = true;
+                mmCg.blocksRaycasts = true;
+            }
+            if (playButton != null) playButton.gameObject.SetActive(true);
+            if (settingsButton != null) settingsButton.gameObject.SetActive(true);
+            if (aboutButton != null) aboutButton.gameObject.SetActive(true);
+            if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
+
             StartPlayButtonPulse();
         }
     }
@@ -239,6 +329,8 @@ public class UIManager : MonoBehaviour
         if (playButton != null) playButton.onClick.AddListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.AddListener(OnBackClicked);
 
+        if (startButton != null) startButton.onClick.AddListener(OnStartButtonClicked);
+
         if (singlePlayerButton != null) singlePlayerButton.onClick.AddListener(OnSinglePlayerClicked);
         if (multiPlayerButton != null)  multiPlayerButton.onClick.AddListener(OnMultiPlayerClicked);
 
@@ -247,7 +339,12 @@ public class UIManager : MonoBehaviour
         if (hardPoster != null) hardPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Hard));
 
         if (settingsButton != null) settingsButton.onClick.AddListener(OnSettingsClicked);
+        if (difficultySettingsButton != null) difficultySettingsButton.onClick.AddListener(OnSettingsClicked);
         if (closeSettingsButton != null) closeSettingsButton.onClick.AddListener(OnCloseSettingsClicked);
+
+        if (menuSoundButton != null) menuSoundButton.onClick.AddListener(OnMenuSoundClicked);
+        if (menuMusicButton != null) menuMusicButton.onClick.AddListener(OnMenuMusicClicked);
+        if (menuVibrationButton != null) menuVibrationButton.onClick.AddListener(OnMenuVibrationClicked);
 
         if (musicToggleButton != null) musicToggleButton.onClick.AddListener(OnMusicToggleClicked);
         if (sfxToggleButton != null) sfxToggleButton.onClick.AddListener(OnSfxToggleClicked);
@@ -262,14 +359,21 @@ public class UIManager : MonoBehaviour
         playButtonPulseTween?.Kill();
         difficultyPanelSequence?.Kill();
         settingsPanelSequence?.Kill();
+        subPanelSequence?.Kill();
 
         if (playButton != null) playButton.onClick.RemoveListener(OnPlayClicked);
         if (backButton != null) backButton.onClick.RemoveListener(OnBackClicked);
+        if (startButton != null) startButton.onClick.RemoveListener(OnStartButtonClicked);
         if (singlePlayerButton != null) singlePlayerButton.onClick.RemoveListener(OnSinglePlayerClicked);
         if (multiPlayerButton != null)  multiPlayerButton.onClick.RemoveListener(OnMultiPlayerClicked);
 
         if (settingsButton != null) settingsButton.onClick.RemoveListener(OnSettingsClicked);
+        if (difficultySettingsButton != null) difficultySettingsButton.onClick.RemoveListener(OnSettingsClicked);
         if (closeSettingsButton != null) closeSettingsButton.onClick.RemoveListener(OnCloseSettingsClicked);
+
+        if (menuSoundButton != null) menuSoundButton.onClick.RemoveListener(OnMenuSoundClicked);
+        if (menuMusicButton != null) menuMusicButton.onClick.RemoveListener(OnMenuMusicClicked);
+        if (menuVibrationButton != null) menuVibrationButton.onClick.RemoveListener(OnMenuVibrationClicked);
 
         if (musicToggleButton != null) musicToggleButton.onClick.RemoveListener(OnMusicToggleClicked);
         if (sfxToggleButton != null) sfxToggleButton.onClick.RemoveListener(OnSfxToggleClicked);
@@ -313,44 +417,219 @@ public class UIManager : MonoBehaviour
         PlayButtonSfx();
         StopPlayButtonPulse();
 
-        if (settingsButton != null) settingsButton.gameObject.SetActive(false);
-        if (aboutButton != null) aboutButton.gameObject.SetActive(false);
-        if (playButton != null) playButton.gameObject.SetActive(false);
-        if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
-
-        ShowDifficultyPanel();
+        ShowDifficultyPanel(instant: false);
     }
 
     private void OnBackClicked()
     {
         PlayButtonSfx();
+
+        if (isSinglePlayerSelected)
+        {
+            // Reset single player selection and re-gray out difficulties
+            isSinglePlayerSelected = false;
+            selectedDifficulty = null;
+            SetDifficultySelectionEnabled(false, instant: false);
+            SetStartButtonState(false, instant: false);
+            return;
+        }
+
+        // Return from Difficulty Panel to Main Menu
         HideDifficultyPanel(() =>
         {
+            if (mainMenuPanel != null)
+            {
+                mainMenuPanel.SetActive(true);
+                mainMenuPanel.transform.localScale = Vector3.one;
+                CanvasGroup mmCg = GetOrAddCanvasGroup(mainMenuPanel);
+                mmCg.alpha = 1f;
+                mmCg.interactable = true;
+                mmCg.blocksRaycasts = true;
+            }
             if (playButton != null) playButton.gameObject.SetActive(true);
             if (settingsButton != null) settingsButton.gameObject.SetActive(true);
             if (aboutButton != null) aboutButton.gameObject.SetActive(true);
             if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
 
+            currentDifficultyStage = DifficultyStage.None;
+            selectedDifficulty = null;
+            isSinglePlayerSelected = false;
             StartPlayButtonPulse();
+            SyncAllToggleVisuals();
         });
     }
 
-    private void ShowDifficultyPanel()
+    private void CacheDifficultyGraphics()
+    {
+        if (difficultiesPanel == null) return;
+        difficultyGraphics.Clear();
+
+        // Background of Difficulties panel
+        Graphic bg = difficultiesPanel.GetComponent<Graphic>();
+        if (bg != null) difficultyGraphics.Add(bg);
+
+        // Title
+        Transform title = difficultiesPanel.transform.Find("Title");
+        if (title != null)
+        {
+            Graphic g = title.GetComponent<Graphic>();
+            if (g != null && !difficultyGraphics.Contains(g)) difficultyGraphics.Add(g);
+        }
+
+        // Posters
+        if (easyPoster != null)
+        {
+            foreach (Graphic g in easyPoster.GetComponentsInChildren<Graphic>(true))
+            {
+                if (g != null && !difficultyGraphics.Contains(g)) difficultyGraphics.Add(g);
+            }
+        }
+        if (mediumPoster != null)
+        {
+            foreach (Graphic g in mediumPoster.GetComponentsInChildren<Graphic>(true))
+            {
+                if (g != null && !difficultyGraphics.Contains(g)) difficultyGraphics.Add(g);
+            }
+        }
+        if (hardPoster != null)
+        {
+            foreach (Graphic g in hardPoster.GetComponentsInChildren<Graphic>(true))
+            {
+                if (g != null && !difficultyGraphics.Contains(g)) difficultyGraphics.Add(g);
+            }
+        }
+    }
+
+    private void SetDifficultySelectionEnabled(bool enabled, bool instant = false)
+    {
+        if (easyPoster != null) easyPoster.interactable = enabled;
+        if (mediumPoster != null) mediumPoster.interactable = enabled;
+        if (hardPoster != null) hardPoster.interactable = enabled;
+
+        Color targetColor = enabled ? difficultyActiveColor : difficultyInactiveColor;
+
+        foreach (Graphic g in difficultyGraphics)
+        {
+            if (g == null) continue;
+            g.DOKill();
+            if (instant)
+            {
+                g.color = targetColor;
+            }
+            else
+            {
+                g.DOColor(targetColor, 0.35f).SetLink(g.gameObject);
+            }
+        }
+
+        if (enabled && !instant && difficultiesPanel != null)
+        {
+            difficultiesPanel.transform.DOKill();
+            difficultiesPanel.transform.DOPunchScale(Vector3.one * 0.03f, 0.3f, 4, 0.5f).SetLink(difficultiesPanel);
+        }
+    }
+
+    private void ShowDifficultyPanel(bool instant = false)
     {
         if (difficultyPanel == null) return;
+
+        selectedDifficulty = null;
+        isSinglePlayerSelected = false;
+        currentDifficultyStage = DifficultyStage.ModeSelection;
+
+        // Both Mode Selection and Difficulties sub-panels are visible
+        if (selectModePanel != null) selectModePanel.SetActive(true);
+        if (difficultiesPanel != null) difficultiesPanel.SetActive(true);
+
+        if (singlePlayerButton != null) singlePlayerButton.interactable = true;
+        if (multiPlayerButton != null) multiPlayerButton.interactable = true;
+
+        // Difficulties panel starts visible but elements are grayish and non-interactable
+        SetDifficultySelectionEnabled(false, instant: true);
+
+        // Start button starts visible but disabled and grayish
+        if (startButton != null)
+        {
+            startButton.gameObject.SetActive(true);
+            SetStartButtonState(false, instant: true);
+        }
+
+        if (instant)
+        {
+            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+            difficultyPanel.SetActive(true);
+            difficultyPanel.transform.localScale = Vector3.one;
+            CanvasGroup diffCg = GetOrAddCanvasGroup(difficultyPanel);
+            diffCg.alpha = 1f;
+            diffCg.interactable = true;
+            diffCg.blocksRaycasts = true;
+            return;
+        }
 
         difficultyPanelSequence?.Kill();
 
         difficultyPanel.SetActive(true);
-        difficultyPanel.transform.localScale = Vector3.zero;
-
         CanvasGroup cg = GetOrAddCanvasGroup(difficultyPanel);
         cg.alpha = 0f;
+        cg.interactable = false;
+        cg.blocksRaycasts = false;
+        difficultyPanel.transform.localScale = Vector3.one * 0.95f;
 
-        difficultyPanelSequence = DOTween.Sequence()
-            .Append(difficultyPanel.transform.DOScale(1f, panelAnimDuration).SetEase(Ease.OutBack))
-            .Join(cg.DOFade(1f, panelAnimDuration))
-            .SetLink(difficultyPanel);
+        CanvasGroup mmCg = mainMenuPanel != null ? GetOrAddCanvasGroup(mainMenuPanel) : null;
+        if (mmCg != null)
+        {
+            mmCg.interactable = false;
+            mmCg.blocksRaycasts = false;
+        }
+
+        difficultyPanelSequence = DOTween.Sequence();
+        if (mmCg != null)
+        {
+            difficultyPanelSequence.Append(mmCg.DOFade(0f, panelAnimDuration).SetEase(Ease.OutQuad));
+            difficultyPanelSequence.Join(mainMenuPanel.transform.DOScale(0.95f, panelAnimDuration).SetEase(Ease.OutQuad));
+        }
+        difficultyPanelSequence.Join(cg.DOFade(1f, panelAnimDuration).SetEase(Ease.InQuad));
+        difficultyPanelSequence.Join(difficultyPanel.transform.DOScale(1f, panelAnimDuration).SetEase(Ease.OutBack));
+        difficultyPanelSequence.OnComplete(() =>
+        {
+            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+            cg.interactable = true;
+            cg.blocksRaycasts = true;
+        });
+    }
+
+    // Sets the Start button to active (interactable + active color) or inactive (not interactable + inactive color).
+    private void SetStartButtonState(bool active, bool instant = false)
+    {
+        if (startButton == null) return;
+        startButton.interactable = active;
+
+        Color targetImgColor = active ? startButtonActiveColor : startButtonInactiveColor;
+        Color targetTextColor = active ? startActiveTextColor : startDisabledTextColor;
+
+        if (startButton.image != null)
+        {
+            startButton.image.DOKill();
+            if (instant)
+                startButton.image.color = targetImgColor;
+            else
+                startButton.image.DOColor(targetImgColor, 0.3f).SetLink(startButton.gameObject);
+        }
+
+        if (startButtonText != null)
+        {
+            startButtonText.DOKill();
+            if (instant)
+                startButtonText.color = targetTextColor;
+            else
+                startButtonText.DOColor(targetTextColor, 0.3f).SetLink(startButton.gameObject);
+        }
+
+        if (active && !instant)
+        {
+            startButton.transform.DOKill();
+            startButton.transform.DOPunchScale(Vector3.one * 0.08f, 0.3f, 5, 0.5f).SetLink(startButton.gameObject);
+        }
     }
 
     private void HideDifficultyPanel(System.Action onComplete = null)
@@ -364,26 +643,59 @@ public class UIManager : MonoBehaviour
         difficultyPanelSequence?.Kill();
 
         CanvasGroup cg = GetOrAddCanvasGroup(difficultyPanel);
+        cg.interactable = false;
+        cg.blocksRaycasts = false;
+
+        CanvasGroup mmCg = null;
+        if (mainMenuPanel != null)
+        {
+            mainMenuPanel.SetActive(true);
+            mmCg = GetOrAddCanvasGroup(mainMenuPanel);
+            mmCg.alpha = 0f;
+            mmCg.interactable = false;
+            mmCg.blocksRaycasts = false;
+            mainMenuPanel.transform.localScale = Vector3.one * 0.95f;
+        }
 
         difficultyPanelSequence = DOTween.Sequence()
-            .Append(difficultyPanel.transform.DOScale(0f, panelAnimDuration).SetEase(Ease.InBack))
-            .Join(cg.DOFade(0f, panelAnimDuration))
-            .OnComplete(() =>
+            .Append(difficultyPanel.transform.DOScale(0.95f, panelAnimDuration).SetEase(Ease.InBack))
+            .Join(cg.DOFade(0f, panelAnimDuration));
+
+        if (mmCg != null)
+        {
+            difficultyPanelSequence.Join(mmCg.DOFade(1f, panelAnimDuration).SetEase(Ease.OutQuad));
+            difficultyPanelSequence.Join(mainMenuPanel.transform.DOScale(1f, panelAnimDuration).SetEase(Ease.OutBack));
+        }
+
+        difficultyPanelSequence.OnComplete(() =>
+        {
+            difficultyPanel.SetActive(false);
+            if (mmCg != null)
             {
-                difficultyPanel.SetActive(false);
-                onComplete?.Invoke();
-            })
-            .SetLink(difficultyPanel);
+                mmCg.interactable = true;
+                mmCg.blocksRaycasts = true;
+            }
+            onComplete?.Invoke();
+        })
+        .SetLink(difficultyPanel);
     }
 
     // ---------------- Difficulty Panel - Mode Selection ----------------
 
-    // SinglePlayer is the only playable mode right now, shown together with
-    // the difficulty posters rather than gating them. Tapping it is just
-    // confirmation feedback.
+    // Single Player selected: enable difficulty posters, change color to normal active color.
     private void OnSinglePlayerClicked()
     {
         PlayButtonSfx();
+        isSinglePlayerSelected = true;
+        currentDifficultyStage = DifficultyStage.DifficultySelection;
+
+        SetDifficultySelectionEnabled(true, instant: false);
+
+        if (singlePlayerButton != null)
+        {
+            singlePlayerButton.transform.DOKill();
+            singlePlayerButton.transform.DOPunchScale(Vector3.one * 0.08f, 0.25f, 5, 0.5f).SetLink(singlePlayerButton.gameObject);
+        }
     }
 
     // Opens the multiplayer lobby panel.
@@ -391,7 +703,6 @@ public class UIManager : MonoBehaviour
     {
         PlayButtonSfx();
 
-        // Hide difficulty panel buttons while the lobby is open
         if (settingsButton != null)  settingsButton.gameObject.SetActive(false);
         if (aboutButton != null)     aboutButton.gameObject.SetActive(false);
         if (playButton != null)      playButton.gameObject.SetActive(false);
@@ -399,6 +710,8 @@ public class UIManager : MonoBehaviour
 
         HideDifficultyPanel(() =>
         {
+            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+
             if (multiplayerLobbyUI == null)
                 multiplayerLobbyUI = MultiplayerLobbyUI.Instance;
             if (multiplayerLobbyUI == null)
@@ -417,11 +730,30 @@ public class UIManager : MonoBehaviour
     /// </summary>
     public void RestoreMainMenuButtons()
     {
+        difficultyPanelSequence?.Kill();
+        if (difficultyPanel != null) difficultyPanel.SetActive(false);
+
+        if (mainMenuPanel != null)
+        {
+            mainMenuPanel.SetActive(true);
+            mainMenuPanel.transform.localScale = Vector3.one;
+            CanvasGroup mmCg = GetOrAddCanvasGroup(mainMenuPanel);
+            mmCg.alpha = 1f;
+            mmCg.interactable = true;
+            mmCg.blocksRaycasts = true;
+        }
+
         if (playButton != null)        playButton.gameObject.SetActive(true);
         if (settingsButton != null)    settingsButton.gameObject.SetActive(true);
         if (aboutButton != null)       aboutButton.gameObject.SetActive(true);
         if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
+
+        isSinglePlayerSelected = false;
+        selectedDifficulty = null;
+        currentDifficultyStage = DifficultyStage.None;
+
         StartPlayButtonPulse();
+        SyncAllToggleVisuals();
     }
 
     // Shared click SFX played by every button on this screen.
@@ -505,22 +837,62 @@ public class UIManager : MonoBehaviour
         SetStatusLabel(sfxStatusLabel, isSfxOn);
     }
 
+    private void SyncAllToggleVisuals()
+    {
+        SyncToggleVisualsFromSoundManager();
+
+        ApplyToggleVisual(isSfxOn, menuSoundOn, menuSoundOff);
+        ApplyToggleVisual(isMusicOn, menuMusicOn, menuMusicOff);
+        ApplyToggleVisual(isVibrationOn, menuVibrationOn, menuVibrationOff);
+    }
+
+    // ---------------- Quick Settings Buttons (Main Menu) ----------------
+
+    private void OnMenuSoundClicked()
+    {
+        isSfxOn = !isSfxOn;
+        SoundManager.Instance?.SetSfxMuted(!isSfxOn);
+        if (isSfxOn) PlayButtonSfx();
+        SyncAllToggleVisuals();
+    }
+
+    private void OnMenuMusicClicked()
+    {
+        PlayButtonSfx();
+        isMusicOn = !isMusicOn;
+        SoundManager.Instance?.SetMusicMuted(!isMusicOn);
+        SyncAllToggleVisuals();
+    }
+
+    private void OnMenuVibrationClicked()
+    {
+        PlayButtonSfx();
+        isVibrationOn = !isVibrationOn;
+        PlayerPrefs.SetInt(VibrationPrefKey, isVibrationOn ? 1 : 0);
+        PlayerPrefs.Save();
+        SyncAllToggleVisuals();
+        if (isVibrationOn)
+        {
+#if UNITY_ANDROID || UNITY_IOS
+            Handheld.Vibrate();
+#endif
+        }
+    }
+
     private void OnMusicToggleClicked()
     {
         PlayButtonSfx();
         isMusicOn = !isMusicOn;
-        ApplyToggleVisual(isMusicOn, musicOnCircle, musicOffCircle);
-        SetStatusLabel(musicStatusLabel, isMusicOn);
         SoundManager.Instance?.SetMusicMuted(!isMusicOn);
+        SyncAllToggleVisuals();
     }
 
     private void OnSfxToggleClicked()
     {
         PlayButtonSfx();
         isSfxOn = !isSfxOn;
-        ApplyToggleVisual(isSfxOn, sfxOnCircle, sfxOffCircle);
-        SetStatusLabel(sfxStatusLabel, isSfxOn);
         SoundManager.Instance?.SetSfxMuted(!isSfxOn);
+        SyncAllToggleVisuals();
     }
 
     private void SetStatusLabel(TMP_Text label, bool on)
@@ -615,14 +987,45 @@ public class UIManager : MonoBehaviour
 
     private void OnDifficultySelected(Difficulty difficulty)
     {
+        if (!isSinglePlayerSelected) return;
+
         SoundManager.Instance?.PlaySFX(GetDifficultyButtonSfxId(difficulty));
 
+        selectedDifficulty = difficulty;
         PlayerPrefs.SetString(DifficultyPrefKey, difficulty.ToString());
         PlayerPrefs.Save();
 
-        // Small punch feedback then load, purely optional polish
-        DOTween.Sequence()
-            .AppendCallback(() => LoadGameScene());
+        HighlightSelectedPoster(difficulty);
+
+        // Activate the Start button now that a difficulty has been chosen
+        SetStartButtonState(true, instant: false);
+    }
+
+    private void HighlightSelectedPoster(Difficulty difficulty)
+    {
+        Button selected = difficulty == Difficulty.Easy ? easyPoster : (difficulty == Difficulty.Medium ? mediumPoster : hardPoster);
+        Button[] allPosters = { easyPoster, mediumPoster, hardPoster };
+
+        foreach (var b in allPosters)
+        {
+            if (b == null) continue;
+            b.transform.DOKill();
+            if (b == selected)
+            {
+                b.transform.DOPunchScale(Vector3.one * 0.12f, 0.3f, 6, 0.5f).SetLink(b.gameObject);
+            }
+            else
+            {
+                b.transform.DOScale(Vector3.one, 0.2f).SetLink(b.gameObject);
+            }
+        }
+    }
+
+    private void OnStartButtonClicked()
+    {
+        if (selectedDifficulty == null) return;
+        PlayButtonSfx();
+        LoadGameScene();
     }
 
     private void LoadGameScene()

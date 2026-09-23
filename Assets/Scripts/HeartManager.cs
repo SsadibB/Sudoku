@@ -4,7 +4,13 @@ using DG.Tweening;
 
 public class HeartManager : MonoBehaviour
 {
-    [Header("Heart UI Images (3 Slots)")]
+    // ---- NEW: 3-slot life model via Life/Lifeless child GameObjects ----
+    [Header("Life Slots (Life1, Life2, Life3 - each has Life + Lifeless children)")]
+    [Tooltip("Assign Life1, Life2, Life3 GameObjects here (in order, slot 0 = rightmost lost first).")]
+    [SerializeField] private GameObject[] lifeSlots; // Life1, Life2, Life3
+
+    // ---- Legacy: kept for backward-compat with heartSlots Image array usage ----
+    [Header("Heart UI Images (3 Slots) - Legacy / fallback")]
     [SerializeField] private Image[] heartSlots;
 
     [Header("Heart Sprites")]
@@ -38,20 +44,25 @@ public class HeartManager : MonoBehaviour
     private int[] hatJumpDirections; // +1 = jumps right, -1 = jumps left
     private bool hatStartPosCaptured;
 
-    public const int MaxHalfHearts = 6;
-    public int CurrentHalfHearts { get; private set; }
+    // ---- 3-life model ----
+    public const int MaxLives = 3;
+    public int CurrentLives { get; private set; }
 
-    // Only 1 full heart (2 half hearts) remaining. Plays once per game.
+    // Back-compat: multiplayer and external callers use half-heart values
+    public const int MaxHalfHearts = MaxLives * 2;
+    public int CurrentHalfHearts => CurrentLives * 2;
+
+    // Only 1 life remaining. Plays once per game.
     private bool oneHeartWarningPlayed;
 
-    public bool IsGameOver => CurrentHalfHearts <= 0;
+    public bool IsGameOver => CurrentLives <= 0;
 
     public System.Action OnGameOver;
     public System.Action<int> OnHalfHeartDeducted;
 
     private void Awake()
     {
-        CurrentHalfHearts = MaxHalfHearts;
+        CurrentLives = MaxLives;
         CaptureHatStartPositions();
     }
 
@@ -97,7 +108,7 @@ public class HeartManager : MonoBehaviour
 
     public void ResetHearts()
     {
-        CurrentHalfHearts = MaxHalfHearts;
+        CurrentLives = MaxLives;
         oneHeartWarningPlayed = false;
         UpdateUI();
         ResetAllHats();
@@ -132,43 +143,54 @@ public class HeartManager : MonoBehaviour
         }
     }
 
+    // Deducts one full life (called once per wrong number entry).
+    // Returns true if lives just hit zero (game over).
     public bool DeductHalfHeart()
     {
-        if (CurrentHalfHearts <= 0) return false;
+        if (CurrentLives <= 0) return false;
 
-        CurrentHalfHearts--;
-        int affectedHeartIndex = CurrentHalfHearts / 2;
-        int slotHalfHeartsAfter = CurrentHalfHearts - (affectedHeartIndex * 2);
+        CurrentLives--;
+        int lostSlotIndex = CurrentLives; // 0-based, the slot that just became empty
 
         UpdateUI();
 
-        // Exactly 1 full heart (2 half hearts) remaining — warn once per game.
-        if (CurrentHalfHearts == 2 && !oneHeartWarningPlayed)
+        // Exactly 1 life remaining — warn once per game.
+        if (CurrentLives == 1 && !oneHeartWarningPlayed)
         {
             oneHeartWarningPlayed = true;
             SoundManager.Instance?.PlaySFX("OneHeart");
         }
 
-        // Punch/Shake effect on damaged heart slot
-        if (heartSlots != null && affectedHeartIndex >= 0 && affectedHeartIndex < heartSlots.Length)
+        // Punch/Shake effect on lost heart slot
+        if (lifeSlots != null && lostSlotIndex >= 0 && lostSlotIndex < lifeSlots.Length)
         {
-            RectTransform heartRect = heartSlots[affectedHeartIndex].rectTransform;
+            var slotRT = lifeSlots[lostSlotIndex].GetComponent<RectTransform>();
+            if (slotRT != null)
+            {
+                slotRT.DOKill(true);
+                slotRT.localScale = Vector3.one;
+                slotRT.DOPunchScale(Vector3.one * 0.35f, 0.4f, 8, 1f)
+                    .OnComplete(() => slotRT.localScale = Vector3.one);
+            }
+        }
+        else if (heartSlots != null && lostSlotIndex >= 0 && lostSlotIndex < heartSlots.Length)
+        {
+            // Legacy fallback
+            RectTransform heartRect = heartSlots[lostSlotIndex].rectTransform;
             heartRect.DOKill(true);
             heartRect.transform.localScale = Vector3.one;
             heartRect.DOPunchScale(Vector3.one * 0.35f, 0.4f, 8, 1f)
                 .OnComplete(() => heartRect.localScale = Vector3.one);
         }
 
-        // slotHalfHeartsAfter == 1 means this heart just went full -> half
-        // (its 1st hat falls). slotHalfHeartsAfter == 0 means half -> empty
-        // (its 2nd hat falls).
-        int halfIndexWithinHeart = (slotHalfHeartsAfter == 1) ? 0 : 1;
-        int hatIndex = affectedHeartIndex * 2 + halfIndexWithinHeart;
-        PlayStrawHatFallEffect(hatIndex);
+        // Play straw hat fall for both hats of the lost slot (slots map to pairs)
+        PlayStrawHatFallEffect(lostSlotIndex * 2);
+        PlayStrawHatFallEffect(lostSlotIndex * 2 + 1);
 
+        // Fire half-heart deducted with the back-compat value
         OnHalfHeartDeducted?.Invoke(CurrentHalfHearts);
 
-        if (CurrentHalfHearts <= 0)
+        if (CurrentLives <= 0)
         {
             OnGameOver?.Invoke();
             return true;
@@ -246,21 +268,35 @@ public class HeartManager : MonoBehaviour
 
     public void UpdateUI()
     {
+        // Primary: toggle Life / Lifeless children in each slot
+        if (lifeSlots != null && lifeSlots.Length >= 3)
+        {
+            for (int i = 0; i < lifeSlots.Length; i++)
+            {
+                if (lifeSlots[i] == null) continue;
+
+                bool alive = (i < CurrentLives);
+                Transform lifeChild = lifeSlots[i].transform.Find("Life");
+                Transform lifelessChild = lifeSlots[i].transform.Find("Lifeless");
+
+                if (lifeChild != null) lifeChild.gameObject.SetActive(alive);
+                if (lifelessChild != null) lifelessChild.gameObject.SetActive(!alive);
+            }
+            return;
+        }
+
+        // Legacy fallback: sprite-swap on heartSlots Images
         if (heartSlots == null || heartSlots.Length < 3) return;
 
         for (int i = 0; i < 3; i++)
         {
-            int slotHalfHearts = CurrentHalfHearts - (i * 2);
+            bool alive = (i < CurrentLives);
+            if (heartSlots[i] == null) continue;
 
-            if (slotHalfHearts >= 2)
+            if (alive)
             {
                 heartSlots[i].sprite = fullHeartSprite;
                 heartSlots[i].enabled = (fullHeartSprite != null);
-            }
-            else if (slotHalfHearts == 1)
-            {
-                heartSlots[i].sprite = halfHeartSprite;
-                heartSlots[i].enabled = (halfHeartSprite != null);
             }
             else
             {

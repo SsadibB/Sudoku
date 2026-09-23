@@ -17,6 +17,10 @@ public class SudokuCell : MonoBehaviour
     private TextMeshProUGUI numberText;
     private TextMeshProUGUI notesText;
 
+    [Header("Notes System")]
+    [SerializeField] private GameObject notesRoot;
+    [SerializeField] private TextMeshProUGUI[] noteTexts = new TextMeshProUGUI[10];
+
     private Color defaultBgColor;
     private Color selectedBgColor;
     private Color highlightBgColor;
@@ -30,6 +34,15 @@ public class SudokuCell : MonoBehaviour
     // Selected wins over highlighted, which wins over default.
     private bool isSelected;
     private bool isHighlighted;
+
+    public bool HasNotes()
+    {
+        for (int n = 1; n <= 9; n++)
+        {
+            if (noteFlags[n]) return true;
+        }
+        return false;
+    }
 
     public void Initialize(int row, int col, Button btn, Image bg, TextMeshProUGUI text, Color defaultBg, Color selectedBg, Color defaultTextColor, TextMeshProUGUI notes = null, Color? highlightBg = null)
     {
@@ -47,11 +60,29 @@ public class SudokuCell : MonoBehaviour
         background.color = defaultBgColor;
         button.onClick.AddListener(() => OnCellClicked?.Invoke(this));
 
-        if (notesText != null)
+        // Locate Notes root and individual 1-9 note elements
+        if (notesRoot == null)
         {
-            notesText.text = "";
-            notesText.gameObject.SetActive(false);
+            Transform nTr = transform.Find("Notes");
+            if (nTr != null) notesRoot = nTr.gameObject;
         }
+
+        if (notesRoot != null)
+        {
+            for (int i = 1; i <= 9; i++)
+            {
+                if (noteTexts[i] == null)
+                {
+                    Transform item = notesRoot.transform.Find($"Note_{i}") ?? notesRoot.transform.Find(i.ToString());
+                    if (item != null)
+                    {
+                        noteTexts[i] = item.GetComponent<TextMeshProUGUI>();
+                    }
+                }
+            }
+        }
+
+        ClearNotes();
     }
 
     public void SetFixedNumber(int number)
@@ -201,7 +232,19 @@ public class SudokuCell : MonoBehaviour
 
     public void ClearNotes()
     {
-        for (int n = 1; n <= 9; n++) noteFlags[n] = false;
+        for (int n = 1; n <= 9; n++)
+        {
+            noteFlags[n] = false;
+            if (noteTexts != null && n < noteTexts.Length && noteTexts[n] != null)
+            {
+                noteTexts[n].gameObject.SetActive(false);
+            }
+        }
+
+        if (notesRoot != null)
+        {
+            notesRoot.SetActive(false);
+        }
 
         if (notesText != null)
         {
@@ -212,13 +255,32 @@ public class SudokuCell : MonoBehaviour
 
     private void RefreshNotesDisplay()
     {
-        if (notesText == null) return;
-
         bool anyNotes = false;
         for (int n = 1; n <= 9; n++)
         {
             if (noteFlags[n]) { anyNotes = true; break; }
         }
+
+        if (notesRoot != null)
+        {
+            notesRoot.SetActive(anyNotes);
+        }
+
+        // Mode 1: Individual 9 note elements
+        bool hasElements = false;
+        for (int n = 1; n <= 9; n++)
+        {
+            if (noteTexts != null && n < noteTexts.Length && noteTexts[n] != null)
+            {
+                hasElements = true;
+                noteTexts[n].gameObject.SetActive(noteFlags[n]);
+            }
+        }
+
+        if (hasElements) return;
+
+        // Mode 2: Fallback single text
+        if (notesText == null) return;
 
         if (!anyNotes)
         {
