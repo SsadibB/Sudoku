@@ -36,9 +36,23 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private string victoryStatusLabel = "Complete";
     [SerializeField] private string gameOverStatusLabel = "Failed";
 
+    [Header("Output Panel - Motivation & Output Messages")]
+    [Tooltip("Large motivational line shown above the output message (e.g. 'Great job!' / 'Don't give up!').\nMaps to Motivation_Text (TMP) inside Output_Panel.")]
+    [SerializeField] private TMP_Text motivationText;
+    [Tooltip("Descriptive outcome line shown below the motivation text (e.g. 'You completed the puzzle!' / 'Try again to beat your best score!').\nMaps to Output_Text (TMP) inside Output_Panel.")]
+    [SerializeField] private TMP_Text outputText;
+
     [Header("Output Panel - Score / Time")]
     [SerializeField] private TMP_Text outputScoreText;
     [SerializeField] private TMP_Text outputTimeText;
+    [Tooltip("TMP text that shows the final time value for the current round (e.g. '04:32').\nMaps to TimeValue_Text (TMP) inside Output_Panel.")]
+    [SerializeField] private TMP_Text outputTimeValueText;
+
+    [Header("Output Panel - Score Stats")]
+    [Tooltip("TMP text that shows the new score for the current round.\nMaps to NewScore/ScoreValue_Text (TMP) inside Output_Panel.")]
+    [SerializeField] private TMP_Text outputNewScoreValueText;
+    [Tooltip("TMP text that shows the all-time best score.\nMaps to HighestScore/ScoreValue_Text (TMP) inside Output_Panel.")]
+    [SerializeField] private TMP_Text outputBestScoreValueText;
 
     [Header("Output Panel - Stars (victory only; earned count based on hearts remaining)")]
     [SerializeField] private GameObject starsContainer;
@@ -101,9 +115,12 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private float randomSfxMinInterval = 15f;
     [SerializeField] private float randomSfxMaxInterval = 30f;
 
+    // ---- Best Score persistence key ----
+    private const string BestScorePrefKey = "BestScore";
+
     // ---- NEW: Level Progression ----
     [Header("Level Progression")]
-    [Tooltip("Optional in-game header label, e.g. shows 'Level 35'.")]
+    [Tooltip("Optional in-game header label, e.g. shows 'Level 35'.\nMaps to Canvas/Game/ButtonsAndLevels/Level/Image/Text (TMP) in GameScene.")]
     [SerializeField] private TMP_Text levelHeaderText;
 
     // ---- NEW: Live HUD Score & Timer (updates while playing, not just on the Output Panel) ----
@@ -212,7 +229,11 @@ public class SudokuGameManager : MonoBehaviour
     private void Start()
     {
         RegisterListeners();
+        AutoRecoverOutputPanelReferences();
         WarnAboutUnassignedReferences();
+
+        // Enable TMP auto-sizing on message texts so they never overflow the panel
+        EnableAutoSizingOnMessageTexts();
 
         // Load difficulty set from Main Menu, default to Easy
         string prefDiff = PlayerPrefs.GetString(UIManager.DifficultyPrefKey, "Easy");
@@ -239,6 +260,63 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         StartNewGame(currentDifficulty, level);
+    }
+
+    // Auto-recovery for Output Panel TMP references that are frequently
+    // left unwired in the Inspector after UI restructuring.
+    private void AutoRecoverOutputPanelReferences()
+    {
+        // Level header text in game HUD
+        if (levelHeaderText == null)
+        {
+            var go = GameObject.Find("Canvas/Game/ButtonsAndLevels/Level/Image/Text (TMP)");
+            if (go != null) levelHeaderText = go.GetComponent<TMP_Text>();
+        }
+
+        // Output Panel Stats — use GetComponentsInChildren (with true to
+        // include inactive children) since Output_Panel is inactive at start.
+        if ((motivationText == null || outputText == null || outputTimeValueText == null
+             || outputNewScoreValueText == null || outputBestScoreValueText == null)
+            && outputPanel != null)
+        {
+            foreach (var t in outputPanel.GetComponentsInChildren<TMP_Text>(true))
+            {
+                string n = t.gameObject.name;
+                Transform p = t.transform.parent;
+
+                if (motivationText == null && n == "Motivation_Text (TMP)")
+                    motivationText = t;
+                else if (outputText == null && n == "Output_Text (TMP)")
+                    outputText = t;
+                else if (outputTimeValueText == null && n == "TimeValue_Text (TMP)")
+                    outputTimeValueText = t;
+                else if (outputNewScoreValueText == null && p != null && p.name == "NewScore" && n == "ScoreValue_Text (TMP)")
+                    outputNewScoreValueText = t;
+                else if (outputBestScoreValueText == null && p != null && p.name == "HighestScore" && n == "ScoreValue_Text (TMP)")
+                    outputBestScoreValueText = t;
+            }
+        }
+    }
+
+    // Enables TMP auto-sizing on the motivation and output message texts
+    // so they shrink/reflow automatically if the content is too long.
+    private void EnableAutoSizingOnMessageTexts()
+    {
+        ApplyAutoSizing(motivationText);
+        ApplyAutoSizing(outputText);
+        ApplyAutoSizing(outputTimeValueText);
+        ApplyAutoSizing(outputNewScoreValueText);
+        ApplyAutoSizing(outputBestScoreValueText);
+    }
+
+    private static void ApplyAutoSizing(TMP_Text tmp)
+    {
+        if (tmp == null) return;
+        tmp.enableAutoSizing = true;
+        // Respect whatever the designer set as the upper bound; only set a
+        // minimum so it never disappears entirely.
+        if (tmp.fontSizeMin <= 0f) tmp.fontSizeMin = 8f;
+        tmp.overflowMode = TMPro.TextOverflowModes.Ellipsis;
     }
 
     /// <summary>
@@ -1008,7 +1086,7 @@ public class SudokuGameManager : MonoBehaviour
         // Avatar - one random sprite from the outcome-appropriate set
         ShowRandomAvatar(isVictory);
 
-        // Texts
+        // --- Legacy text fields (still supported if wired in Inspector) ---
         string statusSource = isVictory ? victoryStatusLabel : gameOverStatusLabel;
         if (outputLevelText != null)
         {
@@ -1024,9 +1102,31 @@ public class SudokuGameManager : MonoBehaviour
                 : statusSource;
         }
 
-        // Score / Time
+        // --- Motivation & Output message texts (Requirement 1) ---
+        if (motivationText != null)
+            motivationText.text = isVictory ? "Great job!" : "Don't give up!";
+        if (outputText != null)
+            outputText.text = isVictory ? "You completed the puzzle!" : "Try again to beat your best score!";
+
+        // --- Score / Time (Requirement 4: freeze time from this round) ---
+        string formattedTime = FormatElapsedTime(levelElapsedSeconds);
         if (outputScoreText != null) outputScoreText.text = $"SCORE:{sessionScore}";
-        if (outputTimeText != null) outputTimeText.text = $"TIME: {FormatElapsedTime(levelElapsedSeconds)}";
+        if (outputTimeText != null)  outputTimeText.text  = $"TIME: {formattedTime}";
+        if (outputTimeValueText != null) outputTimeValueText.text = formattedTime;
+
+        // --- Score Stats: best score & new score (Requirement 3) ---
+        if (outputNewScoreValueText != null)
+            outputNewScoreValueText.text = sessionScore.ToString();
+
+        int bestScore = PlayerPrefs.GetInt(BestScorePrefKey, 0);
+        if (sessionScore > bestScore)
+        {
+            bestScore = sessionScore;
+            PlayerPrefs.SetInt(BestScorePrefKey, bestScore);
+            PlayerPrefs.Save();
+        }
+        if (outputBestScoreValueText != null)
+            outputBestScoreValueText.text = bestScore.ToString();
 
         // Stars - victory only, earned count based on hearts remaining
         if (starsContainer != null) starsContainer.SetActive(isVictory);

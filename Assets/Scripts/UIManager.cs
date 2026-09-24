@@ -80,6 +80,20 @@ public class UIManager : MonoBehaviour
     [SerializeField] private GameObject settingsPanel;
     [SerializeField] private Button closeSettingsButton;
 
+    [Header("Rules Panel")]
+    [Tooltip("Root of the Rules Panel. Opened by the Description (About) button on the Main Menu.")]
+    [SerializeField] private GameObject rulesPanel;
+    [Tooltip("Text GameObject shown by default.")]
+    [SerializeField] private GameObject sudokuRulesText;
+    [Tooltip("Text GameObject shown after pressing Next.")]
+    [SerializeField] private GameObject multiplayerRulesText;
+    [Tooltip("Shows Multiplayer Rules, hides Sudoku Rules.")]
+    [SerializeField] private Button rulesNextButton;
+    [Tooltip("Shows Sudoku Rules, hides Multiplayer Rules.")]
+    [SerializeField] private Button rulesBackButton;
+    [Tooltip("Closes the Rules Panel and returns to the Main Menu.")]
+    [SerializeField] private Button rulesExitButton;
+
     [Header("Settings - Sound / Music Toggle Buttons")]
     [Tooltip("Each toggle button has ToggleBG -> ON circle, OFF circle as children. Only one is active at a time.")]
     [SerializeField] private Button musicToggleButton;
@@ -245,6 +259,38 @@ public class UIManager : MonoBehaviour
         if (playButton == null && mainMenuPanel != null)
             playButton = mainMenuPanel.transform.Find("play")?.GetComponent<Button>();
 
+        // Rules Panel: auto-recover references if they weren't assigned in the Inspector
+        {
+            Transform searchRoot = mainMenuPanel != null && mainMenuPanel.transform.parent != null
+                ? mainMenuPanel.transform.parent
+                : (mainMenuPanel != null ? mainMenuPanel.transform : null);
+
+            if (searchRoot != null)
+            {
+                if (rulesPanel == null)
+                    rulesPanel = searchRoot.Find("RulesPanel")?.gameObject;
+
+                if (aboutButton == null)
+                {
+                    foreach (Button b in searchRoot.GetComponentsInChildren<Button>(true))
+                    {
+                        if (rulesPanel != null && b.transform.IsChildOf(rulesPanel.transform)) continue;
+                        string n = b.name.ToLowerInvariant();
+                        if (n.Contains("description") || n.Contains("about") || n.Contains("info"))
+                        {
+                            aboutButton = b;
+                            break;
+                        }
+                    }
+                }
+            }
+
+            if (aboutButton == null)
+                Debug.LogWarning("[UIManager] Description/About button is not assigned and could not be found — assign 'About Button' on UIManager.");
+            if (rulesPanel == null)
+                Debug.LogWarning("[UIManager] Rules Panel is not assigned — assign 'Rules Panel' on UIManager.");
+        }
+
         // Make sure Difficulty starts hidden and scaled to one
         if (difficultyPanel != null)
         {
@@ -264,6 +310,9 @@ public class UIManager : MonoBehaviour
             settingsPanel.transform.localScale = Vector3.one;
             settingsPanel.SetActive(false);
         }
+
+        if (rulesPanel != null)
+            rulesPanel.SetActive(false);
 
         // MultiPlayer — now implemented; make it interactable and register listener
         if (multiPlayerButton != null) multiPlayerButton.interactable = true;
@@ -332,7 +381,7 @@ public class UIManager : MonoBehaviour
         if (startButton != null) startButton.onClick.AddListener(OnStartButtonClicked);
 
         if (singlePlayerButton != null) singlePlayerButton.onClick.AddListener(OnSinglePlayerClicked);
-        if (multiPlayerButton != null)  multiPlayerButton.onClick.AddListener(OnMultiPlayerClicked);
+        if (multiPlayerButton != null) multiPlayerButton.onClick.AddListener(OnMultiPlayerClicked);
 
         if (easyPoster != null) easyPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Easy));
         if (mediumPoster != null) mediumPoster.onClick.AddListener(() => OnDifficultySelected(Difficulty.Medium));
@@ -351,7 +400,11 @@ public class UIManager : MonoBehaviour
 
         if (languageDropdown != null) languageDropdown.onValueChanged.AddListener(OnLanguageChanged);
 
-        // aboutButton onClick hooked up to your own panel if you have one.
+        // Description (About) button opens the Rules Panel.
+        if (aboutButton != null) aboutButton.onClick.AddListener(OnAboutClicked);
+        if (rulesNextButton != null) rulesNextButton.onClick.AddListener(OnRulesNextClicked);
+        if (rulesBackButton != null) rulesBackButton.onClick.AddListener(OnRulesBackClicked);
+        if (rulesExitButton != null) rulesExitButton.onClick.AddListener(OnRulesExitClicked);
     }
 
     private void OnDestroy()
@@ -365,11 +418,16 @@ public class UIManager : MonoBehaviour
         if (backButton != null) backButton.onClick.RemoveListener(OnBackClicked);
         if (startButton != null) startButton.onClick.RemoveListener(OnStartButtonClicked);
         if (singlePlayerButton != null) singlePlayerButton.onClick.RemoveListener(OnSinglePlayerClicked);
-        if (multiPlayerButton != null)  multiPlayerButton.onClick.RemoveListener(OnMultiPlayerClicked);
+        if (multiPlayerButton != null) multiPlayerButton.onClick.RemoveListener(OnMultiPlayerClicked);
 
         if (settingsButton != null) settingsButton.onClick.RemoveListener(OnSettingsClicked);
         if (difficultySettingsButton != null) difficultySettingsButton.onClick.RemoveListener(OnSettingsClicked);
         if (closeSettingsButton != null) closeSettingsButton.onClick.RemoveListener(OnCloseSettingsClicked);
+
+        if (aboutButton != null) aboutButton.onClick.RemoveListener(OnAboutClicked);
+        if (rulesNextButton != null) rulesNextButton.onClick.RemoveListener(OnRulesNextClicked);
+        if (rulesBackButton != null) rulesBackButton.onClick.RemoveListener(OnRulesBackClicked);
+        if (rulesExitButton != null) rulesExitButton.onClick.RemoveListener(OnRulesExitClicked);
 
         if (menuSoundButton != null) menuSoundButton.onClick.RemoveListener(OnMenuSoundClicked);
         if (menuMusicButton != null) menuMusicButton.onClick.RemoveListener(OnMenuMusicClicked);
@@ -703,9 +761,9 @@ public class UIManager : MonoBehaviour
     {
         PlayButtonSfx();
 
-        if (settingsButton != null)  settingsButton.gameObject.SetActive(false);
-        if (aboutButton != null)     aboutButton.gameObject.SetActive(false);
-        if (playButton != null)      playButton.gameObject.SetActive(false);
+        if (settingsButton != null) settingsButton.gameObject.SetActive(false);
+        if (aboutButton != null) aboutButton.gameObject.SetActive(false);
+        if (playButton != null) playButton.gameObject.SetActive(false);
         if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
 
         HideDifficultyPanel(() =>
@@ -743,9 +801,9 @@ public class UIManager : MonoBehaviour
             mmCg.blocksRaycasts = true;
         }
 
-        if (playButton != null)        playButton.gameObject.SetActive(true);
-        if (settingsButton != null)    settingsButton.gameObject.SetActive(true);
-        if (aboutButton != null)       aboutButton.gameObject.SetActive(true);
+        if (playButton != null) playButton.gameObject.SetActive(true);
+        if (settingsButton != null) settingsButton.gameObject.SetActive(true);
+        if (aboutButton != null) aboutButton.gameObject.SetActive(true);
         if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
 
         isSinglePlayerSelected = false;
@@ -767,6 +825,82 @@ public class UIManager : MonoBehaviour
         CanvasGroup cg = go.GetComponent<CanvasGroup>();
         if (cg == null) cg = go.AddComponent<CanvasGroup>();
         return cg;
+    }
+
+    // ---------------- Rules Panel ----------------
+
+    private void OnAboutClicked()
+    {
+        if (rulesPanel == null)
+        {
+            Debug.LogWarning("[UIManager] Rules Panel is not assigned — Description button does nothing.");
+            return;
+        }
+
+        Debug.Log("[UIManager] Description clicked — opening Rules Panel.");
+        PlayButtonSfx();
+
+        // Hide the Main Menu (and its loose buttons, same as when Play is pressed).
+        playButtonPulseTween?.Kill();
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (playButton != null) playButton.gameObject.SetActive(false);
+        if (settingsButton != null) settingsButton.gameObject.SetActive(false);
+        if (aboutButton != null) aboutButton.gameObject.SetActive(false);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
+
+        rulesPanel.SetActive(true);
+        rulesPanel.transform.localScale = Vector3.one;
+
+        // Always open on the first page.
+        ShowRulesPage(showMultiplayer: false);
+    }
+
+    private void OnRulesNextClicked()
+    {
+        PlayButtonSfx();
+        ShowRulesPage(showMultiplayer: true);
+    }
+
+    private void OnRulesBackClicked()
+    {
+        PlayButtonSfx();
+        ShowRulesPage(showMultiplayer: false);
+    }
+
+    private void OnRulesExitClicked()
+    {
+        PlayButtonSfx();
+
+        if (rulesPanel != null) rulesPanel.SetActive(false);
+
+        // Bring the Main Menu back exactly as it was.
+        if (mainMenuPanel != null)
+        {
+            mainMenuPanel.SetActive(true);
+            mainMenuPanel.transform.localScale = Vector3.one;
+            CanvasGroup mmCg = GetOrAddCanvasGroup(mainMenuPanel);
+            mmCg.alpha = 1f;
+            mmCg.interactable = true;
+            mmCg.blocksRaycasts = true;
+        }
+
+        if (playButton != null) playButton.gameObject.SetActive(true);
+        if (settingsButton != null) settingsButton.gameObject.SetActive(true);
+        if (aboutButton != null) aboutButton.gameObject.SetActive(true);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(true);
+
+        StartPlayButtonPulse();
+    }
+
+    // Exactly one rules text is visible at a time. Next is only shown on the
+    // Sudoku page and Back only on the Multiplayer page.
+    private void ShowRulesPage(bool showMultiplayer)
+    {
+        if (sudokuRulesText != null) sudokuRulesText.SetActive(!showMultiplayer);
+        if (multiplayerRulesText != null) multiplayerRulesText.SetActive(showMultiplayer);
+
+        if (rulesNextButton != null) rulesNextButton.gameObject.SetActive(!showMultiplayer);
+        if (rulesBackButton != null) rulesBackButton.gameObject.SetActive(showMultiplayer);
     }
 
     // ---------------- Settings Panel ----------------
