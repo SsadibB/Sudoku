@@ -179,7 +179,14 @@ public class ProfileManager : MonoBehaviour
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
     {
-        ForceClosePanel();
+        CloseIfPresent();
+    }
+
+    // Silent close: used by automatic paths (scene load / rebind) where a
+    // missing panel is not worth a warning.
+    private void CloseIfPresent()
+    {
+        if (profilePanel != null) profilePanel.SetActive(false);
     }
 
     // Called on the persistent Instance by a freshly-loaded duplicate
@@ -218,7 +225,7 @@ public class ProfileManager : MonoBehaviour
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
         RefreshStatsDisplay();
 
-        ForceClosePanel();
+        CloseIfPresent();
         StartCoroutine(SuppressIconClickBriefly());
     }
 
@@ -264,7 +271,7 @@ public class ProfileManager : MonoBehaviour
     // MainMenu) can force the panel closed regardless of whatever state it
     // was left in — this object is DontDestroyOnLoad, so its open/closed
     // state otherwise survives scene reloads untouched.
-    public void ForceClosePanel() => ClosePanel();
+    public void ForceClosePanel() => CloseIfPresent();
 
     // ==================== Gallery upload ====================
 

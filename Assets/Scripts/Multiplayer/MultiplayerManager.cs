@@ -14,10 +14,33 @@ using Fusion.Sockets;
 public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 {
     private static MultiplayerManager _instance;
+    private static bool _isQuitting;
+
+    // Editor with "Enter Play Mode Options" (no domain reload) keeps statics alive
+    // between runs, so reset them on every play/start.
+    [RuntimeInitializeOnLoadMethod(RuntimeInitializeLoadType.SubsystemRegistration)]
+    private static void ResetStatics()
+    {
+        _instance = null;
+        _isQuitting = false;
+    }
+
+    private void OnApplicationQuit() => _isQuitting = true;
+
+    private void OnDestroy()
+    {
+        if (_instance == this) _instance = null;
+    }
+
     public static MultiplayerManager Instance
     {
         get
         {
+            // While the app / Play mode is shutting down, other scripts unsubscribe
+            // from events in their OnDisable/OnDestroy. Creating a new manager at
+            // that moment is what left a stray "MultiplayerManager" object behind.
+            if (_isQuitting) return null;
+
             if (_instance == null)
             {
                 _instance = FindAnyObjectByType<MultiplayerManager>();
@@ -323,8 +346,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         {
             if (r != null)
             {
-                try { r.RemoveCallbacks(this); } catch {}
-                try { await r.Shutdown(); } catch {}
+                try { r.RemoveCallbacks(this); } catch { }
+                try { await r.Shutdown(); } catch { }
                 if (r.gameObject != null) Destroy(r.gameObject);
             }
         }
