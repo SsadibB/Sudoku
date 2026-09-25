@@ -69,6 +69,10 @@ public class SudokuGameManager : MonoBehaviour
     [Header("In-Game Header Buttons")]
     [SerializeField] private Button backButton;
     [SerializeField] private Button restartHeaderButton;
+    [SerializeField] private Button settingHeaderButton;
+
+    [Header("Settings Panel")]
+    [SerializeField] private SettingsPanelController settingsPanelController;
 
     [Header("Keypad Number Buttons (1 - 9)")]
     [SerializeField] private Button[] numberButtons;
@@ -388,6 +392,14 @@ public class SudokuGameManager : MonoBehaviour
         if (backButton != null) backButton.onClick.AddListener(OnBackClicked);
         if (restartHeaderButton != null) restartHeaderButton.onClick.AddListener(OnRestartHeaderClicked);
 
+        if (settingHeaderButton == null)
+        {
+            var sBtn = GameObject.Find("Canvas/Game/ButtonsAndLevels/SettingButton");
+            if (sBtn != null)
+                settingHeaderButton = sBtn.GetComponent<Button>() ?? sBtn.AddComponent<Button>();
+        }
+        if (settingHeaderButton != null) settingHeaderButton.onClick.AddListener(OnSettingHeaderClicked);
+
         // Keypad Buttons
         if (numberButtons != null)
         {
@@ -471,6 +483,7 @@ public class SudokuGameManager : MonoBehaviour
         if (outputBackButton != null) outputBackButton.onClick.RemoveListener(OnOutputBackClicked);
         if (restartConfirmYesButton != null) restartConfirmYesButton.onClick.RemoveListener(OnRestartConfirmYesClicked);
         if (restartConfirmNoButton != null) restartConfirmNoButton.onClick.RemoveListener(OnRestartConfirmNoClicked);
+        if (settingHeaderButton != null) settingHeaderButton.onClick.RemoveListener(OnSettingHeaderClicked);
     }
 
     // Starts a game at whichever level the player should "Continue" on for
@@ -1133,9 +1146,16 @@ public class SudokuGameManager : MonoBehaviour
         if (isVictory) UpdateStars();
 
         // Buttons - Next only makes sense after a Victory, and only if
-        // there's a next level to go to.
+        // there's a next level to go to. Try Again is the mirror image:
+        // it's the Lost Panel's action, so it only shows on Game Over.
+        // NOTE: outputNextButton / outputRestartButton are wired to the
+        // inner "Next" / "TryAgain" Button components, which each sit
+        // inside their own wrapper container ("NextButton" / "TryAgainButton").
+        // Toggling the Button's own GameObject does nothing if that wrapper
+        // stays inactive, so we toggle the wrapper (parent) instead.
         bool hasNextLevel = currentLevel < LevelManager.MaxLevel;
-        if (outputNextButton != null) outputNextButton.gameObject.SetActive(isVictory && hasNextLevel);
+        if (outputNextButton != null) outputNextButton.transform.parent.gameObject.SetActive(isVictory && hasNextLevel);
+        if (outputRestartButton != null) outputRestartButton.transform.parent.gameObject.SetActive(!isVictory);
 
         outputPanelSequence?.Kill();
 
@@ -1337,6 +1357,24 @@ public class SudokuGameManager : MonoBehaviour
     {
         StopRandomSfxLoop();
         StartNewGame(currentDifficulty);
+    }
+
+    public void RestartCurrentLevel()
+    {
+        StopRandomSfxLoop();
+        StartNewGame(currentDifficulty, currentLevel > 0 ? currentLevel : 1);
+    }
+
+    private void OnSettingHeaderClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        if (settingsPanelController == null)
+            settingsPanelController = FindObjectOfType<SettingsPanelController>(true);
+
+        if (settingsPanelController != null)
+        {
+            settingsPanelController.OpenSettings(isGameplay: true);
+        }
     }
 
     private void PromptDifficultySelection()

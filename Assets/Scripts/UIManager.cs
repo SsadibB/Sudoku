@@ -309,6 +309,7 @@ public class UIManager : MonoBehaviour
         {
             settingsPanel.transform.localScale = Vector3.one;
             settingsPanel.SetActive(false);
+            settingsPanel.GetComponent<SettingsPanelController>()?.DeactivateGameplayButtons();
         }
 
         if (rulesPanel != null)
@@ -589,6 +590,7 @@ public class UIManager : MonoBehaviour
 
     private void ShowDifficultyPanel(bool instant = false)
     {
+        settingsPanel?.GetComponent<SettingsPanelController>()?.DeactivateGameplayButtons();
         if (difficultyPanel == null) return;
 
         selectedDifficulty = null;
@@ -850,6 +852,7 @@ public class UIManager : MonoBehaviour
 
         rulesPanel.SetActive(true);
         rulesPanel.transform.localScale = Vector3.one;
+        settingsPanel?.GetComponent<SettingsPanelController>()?.DeactivateGameplayButtons();
 
         // Always open on the first page.
         ShowRulesPage(showMultiplayer: false);
@@ -925,6 +928,13 @@ public class UIManager : MonoBehaviour
     {
         if (settingsPanel == null) return;
 
+        SettingsPanelController spc = settingsPanel.GetComponent<SettingsPanelController>();
+        if (spc != null)
+        {
+            spc.OpenSettings(isGameplay: false);
+            return;
+        }
+
         settingsPanelSequence?.Kill();
 
         settingsPanel.SetActive(true);
@@ -942,6 +952,13 @@ public class UIManager : MonoBehaviour
     private void HideSettingsPanel()
     {
         if (settingsPanel == null) return;
+
+        SettingsPanelController spc = settingsPanel.GetComponent<SettingsPanelController>();
+        if (spc != null)
+        {
+            spc.CloseSettings();
+            return;
+        }
 
         settingsPanelSequence?.Kill();
 
@@ -978,6 +995,11 @@ public class UIManager : MonoBehaviour
         ApplyToggleVisual(isSfxOn, menuSoundOn, menuSoundOff);
         ApplyToggleVisual(isMusicOn, menuMusicOn, menuMusicOff);
         ApplyToggleVisual(isVibrationOn, menuVibrationOn, menuVibrationOff);
+    }
+
+    public void SyncQuickSettingsFromSoundManager()
+    {
+        SyncAllToggleVisuals();
     }
 
     // ---------------- Quick Settings Buttons (Main Menu) ----------------
