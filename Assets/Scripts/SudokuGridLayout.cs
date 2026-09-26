@@ -13,8 +13,18 @@ public class SudokuGridLayout : MonoBehaviour
     [Tooltip("Prefab for a single board cell. Must have a SudokuCell component on its root, an Image on the root (used as the cell background), a child named exactly \"Number\" with a TextMeshProUGUI, and optionally a child named exactly \"Notes\" with a TextMeshProUGUI for pencil marks.")]
     [SerializeField] private SudokuCell cellPrefab;
 
+    [Header("Grid Size")]
+    [Tooltip("When enabled, the 9x9 grid is exactly Grid Size x Grid Size pixels and the Board is resized to fit it (Grid Size + Board Padding). When disabled, the grid fills whatever space the Board already has.")]
+    [SerializeField] private bool useFixedGridSize = true;
+    [Tooltip("Width AND height of the 9x9 grid in pixels (the grid is always square).")]
+    [SerializeField] private float gridSize = 840f;
+
     [Header("Grid Layout & Padding")]
-    [Tooltip("Padding inside the Board RectTransform to keep cells safely within the dark board borders.")]
+    [Tooltip("When enabled, the gap between the board border and the cells equals the sub-box spacing (X for left/right, Y for top/bottom), plus Extra Border Offset. Overrides Board Padding below.")]
+    [SerializeField] private bool matchPaddingToSubBoxSpacing = true;
+    [Tooltip("Extra pixels added on every side when matching, e.g. the thickness of the board's drawn border. Use 0 to match the sub-box gap exactly.")]
+    [SerializeField] private float extraBorderOffset = 0f;
+    [Tooltip("Padding inside the Board RectTransform to keep cells safely within the dark board borders. Ignored while Match Padding To Sub Box Spacing is on.")]
     [SerializeField] private RectOffset boardPadding;
     [Tooltip("Spacing between adjacent individual cells inside each 3x3 sub-box in pixels.")]
     [SerializeField] private Vector2 cellSpacing = new Vector2(5f, 5f);
@@ -114,6 +124,7 @@ public class SudokuGridLayout : MonoBehaviour
         if (boardRect == null) return;
 
         if (boardPadding == null) boardPadding = new RectOffset(36, 36, 36, 36);
+        RectOffset pad = GetEffectivePadding();
 
         // Ensure Board has a RectMask2D for absolute hardware clipping
         var mask = boardRect.GetComponent<RectMask2D>();
@@ -122,10 +133,23 @@ public class SudokuGridLayout : MonoBehaviour
             boardRect.gameObject.AddComponent<RectMask2D>();
         }
 
-        // Available square area inside the Board's RectTransform
-        float availW = Mathf.Max(50f, boardRect.rect.width - (boardPadding.left + boardPadding.right));
-        float availH = Mathf.Max(50f, boardRect.rect.height - (boardPadding.top + boardPadding.bottom));
-        float availSide = Mathf.Min(availW, availH);
+        float availSide;
+        if (useFixedGridSize)
+        {
+            availSide = Mathf.Max(50f, gridSize);
+
+            // The Board has a RectMask2D, so it must be big enough to hold the
+            // grid plus padding or the edges would be clipped.
+            boardRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Horizontal, availSide + pad.left + pad.right);
+            boardRect.SetSizeWithCurrentAnchors(RectTransform.Axis.Vertical, availSide + pad.top + pad.bottom);
+        }
+        else
+        {
+            // Available square area inside the Board's RectTransform
+            float availW = Mathf.Max(50f, boardRect.rect.width - (pad.left + pad.right));
+            float availH = Mathf.Max(50f, boardRect.rect.height - (pad.top + pad.bottom));
+            availSide = Mathf.Min(availW, availH);
+        }
 
         // 6 internal cell spacings (2 inside each of the 3 sub-boxes) + 2 sub-box spacings
         float totalSpacingX = cellSpacing.x * 6f + subBoxSpacingX * 2f;
@@ -133,7 +157,10 @@ public class SudokuGridLayout : MonoBehaviour
 
         float maxCellW = (availSide - totalSpacingX) / BoardDimension;
         float maxCellH = (availSide - totalSpacingY) / BoardDimension;
-        calculatedCellSide = Mathf.Floor(Mathf.Min(maxCellW, maxCellH));
+        calculatedCellSide = Mathf.Min(maxCellW, maxCellH);
+        // Whole-pixel cells normally, but keep the exact fractional size when a
+        // fixed grid size is requested so the grid is exactly gridSize wide/tall.
+        if (!useFixedGridSize) calculatedCellSide = Mathf.Floor(calculatedCellSide);
         calculatedCellSide = Mathf.Max(10f, calculatedCellSide);
 
         if (autoScaleFontSize)
@@ -186,6 +213,17 @@ public class SudokuGridLayout : MonoBehaviour
                 }
             }
         }
+    }
+
+    // Gap between the Board edge and the cells. When matching is on, it equals
+    // the gap between the 3x3 sub-boxes so the outer margin looks identical.
+    private RectOffset GetEffectivePadding()
+    {
+        if (!matchPaddingToSubBoxSpacing) return boardPadding;
+
+        int x = Mathf.RoundToInt(subBoxSpacingX + extraBorderOffset);
+        int y = Mathf.RoundToInt(subBoxSpacingY + extraBorderOffset);
+        return new RectOffset(x, x, y, y);
     }
 
     private void PositionCells(float gridW, float gridH)
