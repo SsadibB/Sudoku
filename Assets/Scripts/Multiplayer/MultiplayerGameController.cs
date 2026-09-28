@@ -1,6 +1,7 @@
 using System.Collections;
 using UnityEngine;
 using UnityEngine.UI;
+using TMPro;
 using Fusion;
 
 /// <summary>
@@ -35,12 +36,17 @@ public class MultiplayerGameController : MonoBehaviour
 
         bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
 
+        if (boardButton == null)
+            boardButton = FindOpponentBoardButton();
+
         if (boardButton != null)
         {
             boardButton.gameObject.SetActive(isMultiplayer);
             if (isMultiplayer)
                 boardButton.onClick.AddListener(ToggleOpponentBoard);
         }
+
+        BindMatchHud(isMultiplayer);
 
         if (opponentBoardPanel != null && boardButton != null)
         {
@@ -120,10 +126,21 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void Update()
     {
+        float elapsed = gameManager != null
+            ? gameManager.ElapsedSeconds
+            : Mathf.Max(0f, Time.time - gameStartTime);
+
+        if (playerSide != null)
+        {
+            if (gameStarted)
+                NetworkSudokuPlayer.Local?.UpdateElapsed(elapsed);
+            RefreshMatchHud(elapsed);
+        }
+
         if (!gameStarted) return;
 
         // Watch if remote opponent finished the board or forfeited
-        var remote = NetworkSudokuPlayer.Remote;
+        var remote = ResolveRemote();
         if (remote != null)
         {
             if (remote.HasForfeited)
@@ -135,7 +152,6 @@ public class MultiplayerGameController : MonoBehaviour
             {
                 gameStarted = false;
                 gameManager?.EndGameForMultiplayer();
-                float elapsed = Time.time - gameStartTime;
                 ShowResult(isWinner: false, elapsed);
             }
         }
@@ -143,6 +159,14 @@ public class MultiplayerGameController : MonoBehaviour
 
     private IEnumerator InitNetworkPlayerAndBoard()
     {
+        float waitReady = 0f;
+        while ((gameManager == null || !gameManager.GameplayReady) && waitReady < 8f)
+        {
+            gameManager = SudokuGameManager.Instance;
+            waitReady += Time.deltaTime;
+            yield return null;
+        }
+
         var mp = MultiplayerManager.Instance;
         var runner = mp != null ? mp.Runner : null;
         bool isMaster = runner != null && runner.IsSharedModeMasterClient;
@@ -337,5 +361,211 @@ public class MultiplayerGameController : MonoBehaviour
         // already calls Disconnect() and loads MainMenu when the player taps the button.
         float elapsed = Time.time - gameStartTime;
         ShowResult(isWinner: false, elapsed);
+    }
+
+    private Button FindOpponentBoardButton()
+    {
+        var game = GameObject.Find("Game");
+        if (game == null) return null;
+        Transform board = game.transform.Find("ButtonsAndLevels/OpponentsBoard");
+        if (board == null) return null;
+
+        Button button = board.GetComponent<Button>();
+        if (button == null) button = board.gameObject.AddComponent<Button>();
+        if (button.targetGraphic == null)
+            button.targetGraphic = board.GetComponent<Graphic>() ?? board.GetComponentInChildren<Graphic>(true);
+        return button;
+    }
+
+    private Transform playerSide;
+    private Transform opponentSide;
+
+    private void BindMatchHud(bool isMultiplayer)
+    {
+        var game = GameObject.Find("Game");
+        if (game == null) return;
+
+        Transform single = game.transform.Find("SingleStatus");
+        Transform multi = game.transform.Find("MultiplayerStatus");
+        if (single != null) single.gameObject.SetActive(!isMultiplayer);
+        if (multi != null) multi.gameObject.SetActive(isMultiplayer);
+        if (!isMultiplayer || multi == null) return;
+
+        playerSide = multi.Find("Contents/PlayerSide");
+        opponentSide = multi.Find("Contents/OpponentSide");
+        CacheOutputOpponentStats();
+        RefreshMatchHud(0f);
+    }
+
+    private static NetworkSudokuPlayer ResolveRemote()
+    {
+        if (NetworkSudokuPlayer.Remote != null)
+            return NetworkSudokuPlayer.Remote;
+
+        var players = Object.FindObjectsByType<NetworkSudokuPlayer>(FindObjectsInactive.Exclude);
+        for (int i = 0; i < players.Length; i++)
+        {
+            if (players[i] != null && players[i] != NetworkSudokuPlayer.Local)
+                return players[i];
+        }
+        return null;
+    }
+
+    private readonly System.Collections.Generic.List<Transform> outputOpponentStats = new System.Collections.Generic.List<Transform>();
+
+    private void CacheOutputOpponentStats()
+    {
+        outputOpponentStats.Clear();
+        Transform[] all = Resources.FindObjectsOfTypeAll<Transform>();
+        for (int i = 0; i < all.Length; i++)
+        {
+            if (all[i] == null || all[i].name != "OpponentStats") continue;
+            if (!all[i].gameObject.scene.IsValid()) continue;
+            outputOpponentStats.Add(all[i]);
+        }
+    }
+
+    private void RefreshMatchHud(float elapsed)
+    {
+        if (playerSide == null) return;
+
+        var local = NetworkSudokuPlayer.Local;
+        var remote = ResolveRemote();
+        var mp = MultiplayerManager.Instance;
+
+        string localName = local != null ? local.PlayerName.ToString() : (mp != null ? mp.LocalPlayerName : "You");
+        int localLevel = local != null && local.ProfileLevel > 0
+            ? local.ProfileLevel
+            : (ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1);
+        int localLives = local != null
+            ? local.HalfHearts / 2
+            : (gameManager != null ? gameManager.CurrentHalfHearts / 2 : HeartManager.MaxLives);
+        int localScore = gameManager != null ? gameManager.SessionScore : (local != null ? local.Score : 0);
+        Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
+
+        ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar);
+
+        string remoteName = remote != null && !string.IsNullOrEmpty(remote.PlayerName.ToString())
+            ? remote.PlayerName.ToString()
+            : (mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent");
+        int remoteLevel = remote != null && remote.ProfileLevel > 0
+            ? remote.ProfileLevel
+            : (mp != null ? mp.OpponentProfileLevel : 1);
+        int remoteScore = remote != null ? remote.Score : 0;
+        float remoteTime = remote != null ? remote.ElapsedTime : 0f;
+        int remoteLives = remote != null ? Mathf.Max(0, remote.HalfHearts) / 2 : 0;
+        Sprite remoteAvatar = null;
+        if (remote != null && ProfileManager.Instance != null)
+            remoteAvatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
+        if (remoteAvatar == null && mp != null)
+            remoteAvatar = mp.GetOpponentAvatar();
+
+        ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar);
+
+        for (int i = 0; i < outputOpponentStats.Count; i++)
+            ApplyOutputOpponent(outputOpponentStats[i], remoteScore, remoteTime, remoteLives);
+    }
+
+    private static void ApplyOutputOpponent(Transform stats, int score, float time, int lives)
+    {
+        if (stats == null) return;
+
+        SetOutputValue(stats, "ScoreStats", score.ToString());
+        SetOutputValue(stats, "TimeStats", FormatClock(time));
+        SetOutputValue(stats, "LivesStats", Mathf.Max(0, lives).ToString());
+
+        TMP_Text scoreText = FindText(stats, "ScoreValue_Text (TMP)");
+        TMP_Text timeText = FindText(stats, "TimeValue_Text (TMP)");
+        if (scoreText != null) scoreText.text = score.ToString();
+        if (timeText != null) timeText.text = FormatClock(time);
+
+        Transform livesRoot = FindChild(stats, "Lives");
+        if (livesRoot == null) return;
+        int shown = Mathf.Clamp(lives, 0, livesRoot.childCount);
+        for (int i = 0; i < livesRoot.childCount; i++)
+        {
+            Transform slot = livesRoot.GetChild(i);
+            Transform life = slot.Find("Life");
+            Transform lifeless = slot.Find("Lifeless");
+            bool alive = i < shown;
+            if (life != null) life.gameObject.SetActive(alive);
+            if (lifeless != null) lifeless.gameObject.SetActive(!alive);
+        }
+    }
+
+    private static void SetOutputValue(Transform stats, string statName, string value)
+    {
+        Transform stat = FindChild(stats, statName);
+        if (stat == null) return;
+        TMP_Text[] texts = stat.GetComponentsInChildren<TMP_Text>(true);
+        if (texts.Length == 0) return;
+        TMP_Text valueText = texts[texts.Length - 1];
+        for (int i = 0; i < texts.Length; i++)
+        {
+            if (texts[i].gameObject.name.IndexOf("Value", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                valueText = texts[i];
+        }
+        valueText.text = value;
+    }
+
+    private static void ApplySide(Transform side, string playerName, int level, int score, float time, int lives, Sprite avatar)
+    {
+        if (side == null) return;
+
+        TMP_Text nameText = FindText(side, "Name_Text (TMP)");
+        TMP_Text levelText = FindText(side, "Level_Text (TMP)");
+        TMP_Text scoreText = FindText(side, "ScoreValue_Text (TMP)");
+        TMP_Text timeText = FindText(side, "TimeValue_Text (TMP)");
+
+        if (nameText != null) nameText.text = playerName;
+        if (levelText != null) levelText.text = $"Level {Mathf.Max(1, level):00}";
+        if (scoreText != null) scoreText.text = score.ToString();
+        if (timeText != null) timeText.text = FormatClock(time);
+
+        Transform avatarImage = FindChild(side, "Avatar");
+        if (avatarImage != null && avatar != null)
+        {
+            var image = avatarImage.GetComponent<Image>();
+            if (image != null) image.sprite = avatar;
+        }
+
+        Transform livesRoot = FindChild(side, "Lives");
+        if (livesRoot == null) return;
+        int shown = Mathf.Clamp(lives, 0, livesRoot.childCount);
+        for (int i = 0; i < livesRoot.childCount; i++)
+        {
+            Transform slot = livesRoot.GetChild(i);
+            Transform life = slot.Find("Life");
+            Transform lifeless = slot.Find("Lifeless");
+            bool alive = i < shown;
+            if (life != null) life.gameObject.SetActive(alive);
+            if (lifeless != null) lifeless.gameObject.SetActive(!alive);
+        }
+    }
+
+    private static string FormatClock(float seconds)
+    {
+        int total = Mathf.Max(0, Mathf.RoundToInt(seconds));
+        int minutes = total / 60;
+        int secs = total % 60;
+        return $"{minutes:00}:{secs:00}";
+    }
+
+    private static TMP_Text FindText(Transform root, string childName)
+    {
+        Transform t = FindChild(root, childName);
+        return t != null ? t.GetComponent<TMP_Text>() : null;
+    }
+
+    private static Transform FindChild(Transform root, string childName)
+    {
+        if (root == null) return null;
+        if (root.name == childName) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChild(root.GetChild(i), childName);
+            if (found != null) return found;
+        }
+        return null;
     }
 }

@@ -38,6 +38,11 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     // Player name (max 32 chars)
     [Networked] public NetworkString<_32> PlayerName { get; set; }
 
+    // Live match clock, profile level, and preset avatar index for the HUD.
+    [Networked] public float ElapsedTime { get; set; }
+    [Networked] public int ProfileLevel { get; set; }
+    [Networked] public int AvatarIndex { get; set; }
+
     // ---- Static lookup ----
     // Allows any script to quickly get the local or remote player object
     public static NetworkSudokuPlayer Local { get; private set; }
@@ -57,6 +62,13 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             // Start with full hearts and zero score until the game reports otherwise
             HalfHearts = HeartManager.MaxHalfHearts;
             Score = 0;
+            ElapsedTime = 0f;
+
+            if (ProfileManager.Instance != null)
+            {
+                ProfileLevel = ProfileManager.Instance.ProfileLevel;
+                AvatarIndex = ProfileManager.Instance.AvatarPresetIndex;
+            }
 
             // If Master Client, publish the match level
             if (Runner.IsSharedModeMasterClient && MultiplayerManager.Instance != null)
@@ -137,6 +149,12 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     {
         if (!HasStateAuthority) return;
         HalfHearts = halfHearts;
+    }
+
+    public void UpdateElapsed(float elapsed)
+    {
+        if (!HasStateAuthority) return;
+        ElapsedTime = elapsed;
     }
 
     /// <summary>Mark this player as finished.</summary>

@@ -372,6 +372,27 @@ public class UIManager : MonoBehaviour
 
             StartPlayButtonPulse();
         }
+
+        TryOpenRematchLobby();
+    }
+
+    private void TryOpenRematchLobby()
+    {
+        if (MultiplayerManager.Instance == null || !MultiplayerManager.Instance.WantsRematchLobby)
+            return;
+
+        if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (playButton != null) playButton.gameObject.SetActive(false);
+        if (settingsButton != null) settingsButton.gameObject.SetActive(false);
+        if (aboutButton != null) aboutButton.gameObject.SetActive(false);
+        if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
+
+        if (multiplayerLobbyUI == null)
+            multiplayerLobbyUI = MultiplayerLobbyUI.Instance;
+        if (multiplayerLobbyUI == null)
+            multiplayerLobbyUI = FindAnyObjectByType<MultiplayerLobbyUI>(FindObjectsInactive.Include);
+
+        multiplayerLobbyUI?.ShowRematchLobby();
     }
 
     private void RegisterListeners()
@@ -748,6 +769,7 @@ public class UIManager : MonoBehaviour
         PlayButtonSfx();
         isSinglePlayerSelected = true;
         currentDifficultyStage = DifficultyStage.DifficultySelection;
+        ButtonSelectionVisual.Apply(singlePlayerButton, singlePlayerButton, multiPlayerButton);
 
         SetDifficultySelectionEnabled(true, instant: false);
 
@@ -762,6 +784,7 @@ public class UIManager : MonoBehaviour
     private void OnMultiPlayerClicked()
     {
         PlayButtonSfx();
+        ButtonSelectionVisual.Apply(multiPlayerButton, singlePlayerButton, multiPlayerButton);
 
         if (settingsButton != null) settingsButton.gameObject.SetActive(false);
         if (aboutButton != null) aboutButton.gameObject.SetActive(false);
@@ -1162,18 +1185,16 @@ public class UIManager : MonoBehaviour
         Button selected = difficulty == Difficulty.Easy ? easyPoster : (difficulty == Difficulty.Medium ? mediumPoster : hardPoster);
         Button[] allPosters = { easyPoster, mediumPoster, hardPoster };
 
+        ButtonSelectionVisual.Apply(selected, easyPoster, mediumPoster, hardPoster);
+
         foreach (var b in allPosters)
         {
             if (b == null) continue;
             b.transform.DOKill();
             if (b == selected)
-            {
                 b.transform.DOPunchScale(Vector3.one * 0.12f, 0.3f, 6, 0.5f).SetLink(b.gameObject);
-            }
             else
-            {
                 b.transform.DOScale(Vector3.one, 0.2f).SetLink(b.gameObject);
-            }
         }
     }
 
@@ -1187,5 +1208,33 @@ public class UIManager : MonoBehaviour
     private void LoadGameScene()
     {
         SceneManager.LoadScene(gameSceneName);
+    }
+}
+
+/// <summary>
+/// Tints the selected button light gray and restores every other button in the
+/// group to its normal color.
+/// </summary>
+public static class ButtonSelectionVisual
+{
+    public static readonly Color SelectedColor = new Color(0.78f, 0.78f, 0.80f, 1f);
+    public static readonly Color NormalColor = Color.white;
+
+    public static void Apply(Button selected, params Button[] group)
+    {
+        if (group == null) return;
+
+        for (int i = 0; i < group.Length; i++)
+        {
+            Button button = group[i];
+            if (button == null) continue;
+
+            Graphic graphic = button.targetGraphic;
+            if (graphic == null) graphic = button.GetComponent<Graphic>();
+            if (graphic == null) continue;
+
+            graphic.DOKill();
+            graphic.color = button == selected ? SelectedColor : NormalColor;
+        }
     }
 }

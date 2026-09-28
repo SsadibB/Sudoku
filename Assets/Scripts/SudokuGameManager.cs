@@ -132,6 +132,18 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private TMP_Text hudScoreText;
     [SerializeField] private TMP_Text hudTimeText;
 
+    [Header("Loading Screen")]
+    [SerializeField] private GameObject loadingPanel;
+    [SerializeField] private Image loadingFill;
+    [SerializeField] private float loadingDuration = 1.7f;
+
+    [Header("Revive Panel (single player)")]
+    [SerializeField] private GameObject revivePanel;
+    [SerializeField] private Button reviveButton;
+    [SerializeField] private Button reviveCancelButton;
+
+    public bool GameplayReady { get; private set; }
+
     // ---- NEW: Score (shown on the Output Panel and live HUD) ----
     [Header("Score Rewards")]
     [SerializeField] private int scorePerCorrectNumber = 5;
@@ -171,6 +183,8 @@ public class SudokuGameManager : MonoBehaviour
     // ---- Multiplayer read-only accessors (for OpponentBoardPanel / networking) ----
     public int SessionScore => sessionScore;
     public int CurrentHalfHearts => heartManager != null ? heartManager.CurrentHalfHearts : HeartManager.MaxHalfHearts;
+    public bool IsGameActive => isGameActive;
+    public float ElapsedSeconds => isGameActive ? Mathf.Max(0f, Time.time - levelStartTime) : levelElapsedSeconds;
     public event System.Action<int> OnScoreChanged;
 
     private Sequence outputPanelSequence;
@@ -250,6 +264,40 @@ public class SudokuGameManager : MonoBehaviour
             currentDifficulty = UIManager.Difficulty.Easy;
         }
 
+        BindGameplayHud();
+        StartCoroutine(BootWithLoadingScreen());
+    }
+
+    private IEnumerator BootWithLoadingScreen()
+    {
+        ResolveLoadingAndRevive();
+
+        if (loadingPanel != null)
+        {
+            loadingPanel.SetActive(true);
+            loadingPanel.transform.SetAsLastSibling();
+            if (loadingFill != null)
+            {
+                loadingFill.type = Image.Type.Filled;
+                loadingFill.fillMethod = Image.FillMethod.Horizontal;
+                loadingFill.fillOrigin = (int)Image.OriginHorizontal.Left;
+                loadingFill.fillAmount = 0f;
+            }
+        }
+
+        float duration = Mathf.Max(0.4f, loadingDuration);
+        float elapsed = 0f;
+        while (elapsed < duration)
+        {
+            elapsed += Time.deltaTime;
+            if (loadingFill != null)
+                loadingFill.fillAmount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
+            yield return null;
+        }
+
+        if (loadingFill != null) loadingFill.fillAmount = 1f;
+        if (loadingPanel != null) loadingPanel.SetActive(false);
+
         int level;
         if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
         {
@@ -266,6 +314,122 @@ public class SudokuGameManager : MonoBehaviour
         StartNewGame(currentDifficulty, level);
     }
 
+    private void BindGameplayHud()
+    {
+        var game = GameObject.Find("Game");
+        if (game == null) return;
+
+        Transform levelLabel = game.transform.Find("ButtonsAndLevels/Level/LevelBG/Text (TMP)");
+        if (levelLabel != null) levelHeaderText = levelLabel.GetComponent<TMP_Text>();
+
+        bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
+        Transform single = game.transform.Find("SingleStatus");
+        Transform multi = game.transform.Find("MultiplayerStatus");
+        Transform boardButton = game.transform.Find("ButtonsAndLevels/OpponentsBoard");
+
+        if (single != null) single.gameObject.SetActive(!multiplayer);
+        if (multi != null) multi.gameObject.SetActive(multiplayer);
+        if (boardButton != null) boardButton.gameObject.SetActive(multiplayer);
+
+        if (multiplayer || single == null) return;
+
+        Transform timeLabel = single.Find("Time/ClockTime/Text (TMP)");
+        if (timeLabel != null) hudTimeText = timeLabel.GetComponent<TMP_Text>();
+
+        Transform scoreLabel = single.Find("Score/Score/Text (TMP)");
+        if (scoreLabel != null) hudScoreText = scoreLabel.GetComponent<TMP_Text>();
+
+        if (heartManager != null)
+        {
+            Transform lives = single.Find("Lives");
+            if (lives != null && lives.childCount > 0)
+            {
+                var slots = new GameObject[lives.childCount];
+                for (int i = 0; i < lives.childCount; i++)
+                    slots[i] = lives.GetChild(i).gameObject;
+                heartManager.BindLifeSlots(slots);
+            }
+        }
+    }
+
+    private void ResolveLoadingAndRevive()
+    {
+        var canvas = GameObject.Find("Canvas");
+        if (canvas == null) return;
+
+        if (loadingPanel == null)
+        {
+            Transform loading = canvas.transform.Find("LoadingPanel");
+            if (loading != null) loadingPanel = loading.gameObject;
+        }
+
+        if (loadingFill == null && loadingPanel != null)
+        {
+            Image[] images = loadingPanel.GetComponentsInChildren<Image>(true);
+            for (int i = 0; i < images.Length; i++)
+            {
+                if (images[i].gameObject.name == "FillBar")
+                {
+                    loadingFill = images[i];
+                    break;
+                }
+            }
+        }
+
+        if (revivePanel == null)
+        {
+            Transform revive = canvas.transform.Find("RevivePanel");
+            if (revive != null) revivePanel = revive.gameObject;
+        }
+
+        if (revivePanel == null) return;
+
+        if (reviveButton == null)
+        {
+            Transform revive = FindChildNamed(revivePanel.transform, "Revive");
+            if (revive != null) reviveButton = EnsureButton(revive.gameObject);
+        }
+
+        if (reviveCancelButton == null)
+        {
+            Transform cancel = FindChildNamed(revivePanel.transform, "Cancel");
+            if (cancel != null) reviveCancelButton = EnsureButton(cancel.gameObject);
+        }
+
+        if (reviveButton != null)
+        {
+            reviveButton.onClick.RemoveListener(OnReviveClicked);
+            reviveButton.onClick.AddListener(OnReviveClicked);
+        }
+
+        if (reviveCancelButton != null)
+        {
+            reviveCancelButton.onClick.RemoveListener(OnReviveCancelClicked);
+            reviveCancelButton.onClick.AddListener(OnReviveCancelClicked);
+        }
+    }
+
+    private static Button EnsureButton(GameObject go)
+    {
+        Button button = go.GetComponent<Button>();
+        if (button == null) button = go.AddComponent<Button>();
+        if (button.targetGraphic == null)
+            button.targetGraphic = go.GetComponent<Graphic>() ?? go.GetComponentInChildren<Graphic>(true);
+        return button;
+    }
+
+    private static Transform FindChildNamed(Transform root, string childName)
+    {
+        if (root == null) return null;
+        if (root.name == childName) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChildNamed(root.GetChild(i), childName);
+            if (found != null) return found;
+        }
+        return null;
+    }
+
     // Auto-recovery for Output Panel TMP references that are frequently
     // left unwired in the Inspector after UI restructuring.
     private void AutoRecoverOutputPanelReferences()
@@ -273,8 +437,18 @@ public class SudokuGameManager : MonoBehaviour
         // Level header text in game HUD
         if (levelHeaderText == null)
         {
-            var go = GameObject.Find("Canvas/Game/ButtonsAndLevels/Level/Image/Text (TMP)");
-            if (go != null) levelHeaderText = go.GetComponent<TMP_Text>();
+            var levelLabel = GameObject.Find("Game") != null
+                ? GameObject.Find("Game").transform.Find("ButtonsAndLevels/Level/LevelBG/Text (TMP)")
+                : null;
+            if (levelLabel == null)
+            {
+                var go = GameObject.Find("Canvas/Game/ButtonsAndLevels/Level/Image/Text (TMP)");
+                if (go != null) levelHeaderText = go.GetComponent<TMP_Text>();
+            }
+            else
+            {
+                levelHeaderText = levelLabel.GetComponent<TMP_Text>();
+            }
         }
 
         // Output Panel Stats — use GetComponentsInChildren (with true to
@@ -527,14 +701,10 @@ public class SudokuGameManager : MonoBehaviour
 
         if (levelHeaderText != null)
         {
-            if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
-            {
-                levelHeaderText.text = currentDifficulty.ToString();
-            }
-            else
-            {
-                levelHeaderText.text = $"Level {currentLevel}";
-            }
+            bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
+            levelHeaderText.text = multiplayer
+                ? currentDifficulty.ToString().ToUpper()
+                : $"LEVEL {currentLevel:00}";
         }
 
         if (gridLayout != null)
@@ -564,6 +734,7 @@ public class SudokuGameManager : MonoBehaviour
         ResetNotesButtonScale();
 
         isGameActive = true;
+        GameplayReady = true;
 
         SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(difficulty));
         StartRandomSfxLoop();
@@ -1074,6 +1245,65 @@ public class SudokuGameManager : MonoBehaviour
 
         isGameActive = false;
         levelElapsedSeconds = Time.time - levelStartTime;
+        StopRandomSfxLoop();
+
+        bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        if (multiplayer)
+            return;
+
+        ShowRevivePanel();
+    }
+
+    private void ShowRevivePanel()
+    {
+        ResolveLoadingAndRevive();
+        if (revivePanel == null)
+        {
+            ProfileManager.Instance?.RecordLoss();
+            ShowOutputPanel(isVictory: false);
+            return;
+        }
+
+        revivePanel.SetActive(true);
+        revivePanel.transform.SetAsLastSibling();
+    }
+
+    private void OnReviveClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        RewardedAdManager.EnsureInstance();
+        if (RewardedAdManager.Instance == null)
+        {
+            GrantRevive();
+            return;
+        }
+
+        RewardedAdManager.Instance.ShowRewardedAd(GrantRevive, null, OnReviveAdFailed);
+    }
+
+    private void OnReviveAdFailed()
+    {
+#if UNITY_EDITOR
+        GrantRevive();
+#else
+        UIToast.Show("Ad not available. Try again.");
+#endif
+    }
+
+    private void GrantRevive()
+    {
+        if (revivePanel != null) revivePanel.SetActive(false);
+        if (heartManager != null) heartManager.RestoreOneLife();
+        isGameActive = true;
+        levelStartTime = Time.time - levelElapsedSeconds;
+        SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(currentDifficulty));
+        StartRandomSfxLoop();
+    }
+
+    private void OnReviveCancelClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        if (revivePanel != null) revivePanel.SetActive(false);
         ProfileManager.Instance?.RecordLoss();
         ShowOutputPanel(isVictory: false);
     }

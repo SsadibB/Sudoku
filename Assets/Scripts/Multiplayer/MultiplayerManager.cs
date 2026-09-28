@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.SceneManagement;
@@ -63,6 +64,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public event Action OnOpponentJoined;
     public event Action OnOpponentLeft;
     public event Action OnMatchmakingTimeout;
+    public event Action OnOpponentIdentity;
+    public event Action OnRematchStateChanged;
 
     // ---- State ----
     public NetworkRunner Runner { get; private set; }
@@ -78,12 +81,25 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     }
 
     public string LocalPlayerName { get; private set; } = "Player";
+    public string OpponentName { get; private set; }
+    public int OpponentAvatarIndex { get; private set; } = -1;
+    public int OpponentProfileLevel { get; private set; } = 1;
+    public bool RematchRequestedLocal { get; private set; }
+    public bool RematchRequestedRemote { get; private set; }
+    public bool WantsRematchLobby => RematchRequestedLocal && IsInSession;
+    public bool BothWantRematch => RematchRequestedLocal && RematchRequestedRemote;
 
     private const float MatchmakingTimeoutSeconds = 60f;
     private const int MaxPlayersPerRoom = 2;
 
     private Coroutine matchmakingTimeoutCoroutine;
     private bool waitingForOpponent;
+    private bool awaitHostStart;
+    private bool sceneLoadRequested;
+    private bool rematchLobbyRequested;
+
+    private static readonly ReliableKey IdentityKey = ReliableKey.FromInts(1, 0, 0, 0);
+    private static readonly ReliableKey RematchKey = ReliableKey.FromInts(2, 0, 0, 0);
 
     // ---- Session names ----
     // International rooms are named: "INT_{difficulty}_{shortGuid}"
@@ -111,8 +127,24 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         RefreshLocalPlayerName();
     }
 
+    public void SetLocalPlayerName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+        LocalPlayerName = name.Trim();
+
+        var local = NetworkSudokuPlayer.Local;
+        if (local != null && local.HasStateAuthority)
+            local.PlayerName = LocalPlayerName;
+    }
+
     private void RefreshLocalPlayerName()
     {
+        if (ProfileManager.Instance != null && !string.IsNullOrWhiteSpace(ProfileManager.Instance.PlayerName))
+        {
+            LocalPlayerName = ProfileManager.Instance.PlayerName.Trim();
+            return;
+        }
+
         // Try to pull the display name from the AuthLogin session
         var authMgr = SadibTools.AuthLogin.AuthManager.Instance;
         if (authMgr != null && authMgr.IsSignedIn && authMgr.CurrentSession != null)
@@ -156,6 +188,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             IsHost = false;
             IsMultiplayerGame = true;
             waitingForOpponent = true;
+            awaitHostStart = false;
+            sceneLoadRequested = false;
+            ClearOpponentIdentity();
 
             var runner = await CreateNetworkRunner();
 
@@ -209,6 +244,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             IsHost = true;
             IsMultiplayerGame = true;
             waitingForOpponent = true;
+            awaitHostStart = true;
+            sceneLoadRequested = false;
+            ClearOpponentIdentity();
 
             string roomCode = GenerateRoomCode();
             MatchLevel = (Math.Abs(roomCode.Trim().ToUpper().GetHashCode()) % 500) + 1;
@@ -262,6 +300,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             MatchLevel = (Math.Abs(roomCode.Trim().ToUpper().GetHashCode()) % 500) + 1;
             IsHost = false;
             IsMultiplayerGame = true;
+            waitingForOpponent = true;
+            awaitHostStart = true;
+            sceneLoadRequested = false;
+            ClearOpponentIdentity();
 
             var runner = await CreateNetworkRunner();
 
@@ -300,7 +342,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         IsMultiplayerGame = false;
         waitingForOpponent = false;
+        awaitHostStart = false;
+        sceneLoadRequested = false;
+        rematchLobbyRequested = false;
         isStartingGame = false;
+        ClearOpponentIdentity();
+        ClearRematchFlags();
         if (matchmakingTimeoutCoroutine != null)
         {
             StopCoroutine(matchmakingTimeoutCoroutine);
@@ -433,28 +480,94 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 matchmakingTimeoutCoroutine = null;
             }
 
-            // If this is NOT the local player joining, it's the opponent
-            if (player != runner.LocalPlayer)
-            {
-                OnOpponentJoined?.Invoke();
-
-                // Difficulty is confirmed from session — load the game scene
-                // Give a brief moment so both players get the callback
-                StartCoroutine(LoadGameSceneNextFrame());
-            }
+            BroadcastIdentity();
+            OnOpponentJoined?.Invoke();
         }
     }
 
-    private IEnumerator LoadGameSceneNextFrame()
+    private void BroadcastIdentity()
     {
-        yield return new WaitForSeconds(0.5f);
-        // Only the Shared-mode "State Authority" (first player / host-equivalent)
-        // drives scene load; others are loaded by Fusion's scene manager.
-        if (Runner != null && Runner.IsSharedModeMasterClient)
+        if (Runner == null) return;
+
+        int avatar = ProfileManager.Instance != null ? ProfileManager.Instance.AvatarPresetIndex : -1;
+        int level = ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1;
+        string payload = LocalPlayerName + "\n" + avatar + "\n" + level;
+        SendToOthers(IdentityKey, Encoding.UTF8.GetBytes(payload));
+    }
+
+    private void BroadcastRematch()
+    {
+        SendToOthers(RematchKey, Encoding.UTF8.GetBytes("1"));
+    }
+
+    private void SendToOthers(ReliableKey key, byte[] payload)
+    {
+        if (Runner == null || payload == null) return;
+
+        foreach (var other in Runner.ActivePlayers)
         {
-            Runner.LoadScene(SceneRef.FromIndex(
-                SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/GameScene.unity")));
+            if (other == Runner.LocalPlayer) continue;
+            Runner.SendReliableDataToPlayer(other, key, payload);
         }
+    }
+
+    private void ClearOpponentIdentity()
+    {
+        OpponentName = null;
+        OpponentAvatarIndex = -1;
+        OpponentProfileLevel = 1;
+    }
+
+    private void ClearRematchFlags()
+    {
+        RematchRequestedLocal = false;
+        RematchRequestedRemote = false;
+    }
+
+    /// <summary>
+    /// Competition and rematch stay in the lobby until the host presses Start.
+    /// International matchmaking calls this after the opponent has been shown.
+    /// Only the shared-mode master client loads the scene; Fusion brings the other player along.
+    /// </summary>
+    public void HostStartMatch()
+    {
+        if (sceneLoadRequested) return;
+        if (Runner == null || !Runner.IsRunning || !Runner.IsSharedModeMasterClient) return;
+
+        sceneLoadRequested = true;
+        rematchLobbyRequested = false;
+        waitingForOpponent = false;
+        ClearRematchFlags();
+
+        Runner.LoadScene(SceneRef.FromIndex(
+            SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/GameScene.unity")));
+    }
+
+    public void RequestRematch()
+    {
+        RematchRequestedLocal = true;
+        awaitHostStart = true;
+        sceneLoadRequested = false;
+        BroadcastRematch();
+        OnRematchStateChanged?.Invoke();
+        if (BothWantRematch)
+            LoadRematchLobby();
+    }
+
+    public void LoadRematchLobby()
+    {
+        if (rematchLobbyRequested) return;
+        if (Runner == null || !Runner.IsRunning || !Runner.IsSharedModeMasterClient) return;
+
+        rematchLobbyRequested = true;
+        Runner.LoadScene(SceneRef.FromIndex(
+            SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/MainMenu.unity")));
+    }
+
+    public Sprite GetOpponentAvatar()
+    {
+        if (ProfileManager.Instance == null) return null;
+        return ProfileManager.Instance.GetPresetAvatar(OpponentAvatarIndex);
     }
 
     void INetworkRunnerCallbacks.OnPlayerLeft(NetworkRunner runner, PlayerRef player)
@@ -486,7 +599,36 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     void INetworkRunnerCallbacks.OnSceneLoadStart(NetworkRunner runner) { }
     void INetworkRunnerCallbacks.OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
     void INetworkRunnerCallbacks.OnObjectEnterAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
-    void INetworkRunnerCallbacks.OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, System.ReadOnlySpan<byte> data) { }
+    void INetworkRunnerCallbacks.OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, System.ReadOnlySpan<byte> data)
+    {
+        if (player == runner.LocalPlayer || data.Length == 0) return;
+
+        int keyId;
+        int unusedB;
+        int unusedC;
+        int unusedD;
+        key.GetInts(out keyId, out unusedB, out unusedC, out unusedD);
+
+        string payload = Encoding.UTF8.GetString(data);
+
+        if (keyId == 1)
+        {
+            string[] parts = payload.Split('\n');
+            if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]))
+                OpponentName = parts[0].Trim();
+            if (parts.Length > 1 && int.TryParse(parts[1], out int avatarIndex))
+                OpponentAvatarIndex = avatarIndex;
+            if (parts.Length > 2 && int.TryParse(parts[2], out int profileLevel))
+                OpponentProfileLevel = Mathf.Max(1, profileLevel);
+
+            OnOpponentIdentity?.Invoke();
+        }
+        else if (keyId == 2)
+        {
+            RematchRequestedRemote = true;
+            OnRematchStateChanged?.Invoke();
+        }
+    }
     void INetworkRunnerCallbacks.OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress) { }
     void INetworkRunnerCallbacks.OnInput(NetworkRunner runner, NetworkInput input) { }
     void INetworkRunnerCallbacks.OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }

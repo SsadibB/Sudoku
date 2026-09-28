@@ -76,6 +76,14 @@ public class ProfileManager : MonoBehaviour
     private const string ProfileXPKey = "ProfileXP";
 
     public int ProfileLevel { get; private set; }
+
+    public const string PlayerNameKey = "PlayerDisplayName";
+    public string PlayerName { get; private set; } = "Player";
+    public event System.Action<string> OnPlayerNameChanged;
+
+    private TMP_InputField nameInput;
+    private TMP_Text profileNameLabel;
+    private GameObject nameSetupPanel;
     public int CurrentXP { get; private set; }
     public int XPRequiredForCurrentLevel => GetXPRequiredForLevel(ProfileLevel);
 
@@ -160,6 +168,12 @@ public class ProfileManager : MonoBehaviour
 
         if (profilePanel != null) profilePanel.SetActive(false);
 
+        LoadPlayerName();
+        if (MultiplayerManager.Instance != null)
+            MultiplayerManager.Instance.SetLocalPlayerName(PlayerName);
+        EnsureNameField();
+        ApplyPlayerNameToLabels();
+
         // Belt-and-suspenders: catches any scene-loaded case not already
         // covered by RebindFrom (e.g. additive loads that don't spawn a
         // duplicate ProfileManager). RebindFrom is the one that matters for
@@ -223,6 +237,8 @@ public class ProfileManager : MonoBehaviour
         // and the current stats onto the fresh Text refs — both existed
         // before this reload and otherwise wouldn't show until they changed.
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
+        EnsureNameField();
+        ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
 
         CloseIfPresent();
@@ -246,7 +262,218 @@ public class ProfileManager : MonoBehaviour
     {
         Debug.Log($"[ProfileManager] OpenPanel() called. Frame: {Time.frameCount}");
         if (profilePanel != null) profilePanel.SetActive(true);
+        EnsureNameField();
+        ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
+    }
+
+    public void SetPlayerName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return;
+
+        name = name.Trim();
+        if (name.Length > 16) name = name.Substring(0, 16);
+        if (name == PlayerName) 
+        {
+            CloseNameSetup();
+            return;
+        }
+
+        PlayerName = name;
+        PlayerPrefs.SetString(PlayerNameKey, name);
+        PlayerPrefs.Save();
+        ApplyPlayerNameToLabels();
+        OnPlayerNameChanged?.Invoke(PlayerName);
+
+        if (MultiplayerManager.Instance != null)
+            MultiplayerManager.Instance.SetLocalPlayerName(PlayerName);
+
+        CloseNameSetup();
+    }
+
+    private void LoadPlayerName()
+    {
+        string saved = PlayerPrefs.GetString(PlayerNameKey, "");
+        if (!string.IsNullOrWhiteSpace(saved))
+        {
+            PlayerName = saved.Trim();
+            return;
+        }
+
+        var authMgr = SadibTools.AuthLogin.AuthManager.Instance;
+        if (authMgr != null && authMgr.IsSignedIn && authMgr.CurrentSession != null
+            && !string.IsNullOrWhiteSpace(authMgr.CurrentSession.DisplayName))
+        {
+            PlayerName = authMgr.CurrentSession.DisplayName.Trim();
+            return;
+        }
+
+        PlayerName = "Player";
+    }
+
+    private void EnsureNameField()
+    {
+        if (profilePanel == null) return;
+
+        if (profileNameLabel == null)
+        {
+            Transform label = FindChildNamed(profilePanel.transform, "ProfileNameText");
+            if (label != null) profileNameLabel = label.GetComponent<TMP_Text>();
+        }
+
+        if (nameSetupPanel == null)
+        {
+            Transform setup = FindChildNamed(profilePanel.transform, "NameSetupPanel");
+            if (setup != null) nameSetupPanel = setup.gameObject;
+        }
+
+        if (nameInput == null)
+            nameInput = profilePanel.GetComponentInChildren<TMP_InputField>(true);
+
+        bool inputIsHiddenDialog = nameInput != null && nameSetupPanel != null
+            && nameInput.transform.IsChildOf(nameSetupPanel.transform);
+        if (nameInput == null || inputIsHiddenDialog)
+        {
+            Transform inline = profilePanel.transform.Find("PlayerNameInput");
+            TMP_InputField inlineInput = inline != null ? inline.GetComponent<TMP_InputField>() : null;
+            if (inlineInput == null)
+                inlineInput = CreateNameInput(profilePanel.transform);
+
+            if (inputIsHiddenDialog)
+            {
+                nameInput.onEndEdit.RemoveListener(SetPlayerName);
+                nameInput.onEndEdit.AddListener(SetPlayerName);
+            }
+
+            nameInput = inlineInput;
+        }
+
+        nameInput.onEndEdit.RemoveListener(SetPlayerName);
+        nameInput.onEndEdit.AddListener(SetPlayerName);
+        nameInput.characterLimit = 16;
+
+        Transform confirm = FindChildNamed(profilePanel.transform, "Btn_Confirm");
+        if (confirm != null)
+        {
+            Button button = confirm.GetComponent<Button>();
+            if (button == null) button = confirm.gameObject.AddComponent<Button>();
+            button.onClick.RemoveListener(ConfirmNameFromInput);
+            button.onClick.AddListener(ConfirmNameFromInput);
+        }
+
+        if (profileNameLabel != null)
+        {
+            Button nameButton = profileNameLabel.GetComponent<Button>();
+            if (nameButton == null && nameSetupPanel != null)
+                nameButton = profileNameLabel.gameObject.AddComponent<Button>();
+            if (nameButton != null)
+            {
+                nameButton.onClick.RemoveListener(OpenNameSetup);
+                nameButton.onClick.AddListener(OpenNameSetup);
+            }
+        }
+    }
+
+    private void ConfirmNameFromInput()
+    {
+        if (nameInput != null) SetPlayerName(nameInput.text);
+    }
+
+    private void OpenNameSetup()
+    {
+        if (nameSetupPanel != null) nameSetupPanel.SetActive(true);
+        if (nameInput != null) nameInput.text = PlayerName;
+    }
+
+    private void CloseNameSetup()
+    {
+        if (nameSetupPanel != null) nameSetupPanel.SetActive(false);
+    }
+
+    private void ApplyPlayerNameToLabels()
+    {
+        if (profileNameLabel != null) profileNameLabel.text = PlayerName;
+        if (nameInput != null && nameInput.text != PlayerName) nameInput.text = PlayerName;
+
+        TMP_Text[] labels = Resources.FindObjectsOfTypeAll<TMP_Text>();
+        for (int i = 0; i < labels.Length; i++)
+        {
+            if (labels[i] == null || !labels[i].gameObject.scene.IsValid()) continue;
+            if (labels[i].gameObject.name == "ProfileNameText")
+            {
+                labels[i].text = PlayerName;
+                continue;
+            }
+
+            if (labels[i].gameObject.name == "Name_Text (TMP)"
+                && labels[i].transform.parent != null
+                && labels[i].transform.parent.name == "Profile")
+            {
+                labels[i].text = PlayerName;
+            }
+        }
+    }
+
+    private static TMP_InputField CreateNameInput(Transform parent)
+    {
+        var root = new GameObject("PlayerNameInput", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(TMP_InputField));
+        root.transform.SetParent(parent, false);
+        var rt = root.GetComponent<RectTransform>();
+        rt.anchorMin = new Vector2(0.5f, 1f);
+        rt.anchorMax = new Vector2(0.5f, 1f);
+        rt.pivot = new Vector2(0.5f, 1f);
+        rt.anchoredPosition = new Vector2(0f, -70f);
+        rt.sizeDelta = new Vector2(560f, 78f);
+
+        var background = root.GetComponent<Image>();
+        background.color = new Color(1f, 1f, 1f, 0.92f);
+
+        var textGo = new GameObject("Text", typeof(RectTransform));
+        textGo.transform.SetParent(root.transform, false);
+        var textRt = textGo.GetComponent<RectTransform>();
+        textRt.anchorMin = Vector2.zero;
+        textRt.anchorMax = Vector2.one;
+        textRt.offsetMin = new Vector2(16f, 8f);
+        textRt.offsetMax = new Vector2(-16f, -8f);
+        var text = textGo.AddComponent<TextMeshProUGUI>();
+        text.fontSize = 36f;
+        text.alignment = TextAlignmentOptions.Center;
+        text.color = new Color(0.25f, 0.16f, 0.08f, 1f);
+        text.raycastTarget = false;
+
+        var placeholderGo = new GameObject("Placeholder", typeof(RectTransform));
+        placeholderGo.transform.SetParent(root.transform, false);
+        var placeholderRt = placeholderGo.GetComponent<RectTransform>();
+        placeholderRt.anchorMin = Vector2.zero;
+        placeholderRt.anchorMax = Vector2.one;
+        placeholderRt.offsetMin = new Vector2(16f, 8f);
+        placeholderRt.offsetMax = new Vector2(-16f, -8f);
+        var placeholder = placeholderGo.AddComponent<TextMeshProUGUI>();
+        placeholder.fontSize = 32f;
+        placeholder.fontStyle = FontStyles.Italic;
+        placeholder.alignment = TextAlignmentOptions.Center;
+        placeholder.color = new Color(0.25f, 0.16f, 0.08f, 0.45f);
+        placeholder.text = "Enter your name";
+        placeholder.raycastTarget = false;
+
+        var input = root.GetComponent<TMP_InputField>();
+        input.textViewport = textRt;
+        input.textComponent = text;
+        input.placeholder = placeholder;
+        input.characterLimit = 16;
+        return input;
+    }
+
+    private static Transform FindChildNamed(Transform root, string childName)
+    {
+        if (root == null) return null;
+        if (root.name == childName) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChildNamed(root.GetChild(i), childName);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void ClosePanel()
@@ -422,6 +649,19 @@ public class ProfileManager : MonoBehaviour
     // Cached so RebindFrom can re-apply the already-chosen avatar to fresh
     // Image references after a scene reload, without re-reading disk/prefs.
     private Sprite currentAvatarSprite;
+
+    public Sprite CurrentAvatarSprite => currentAvatarSprite;
+
+    public int AvatarPresetIndex =>
+        PlayerPrefs.GetString(PREF_MODE, "") == "preset"
+            ? PlayerPrefs.GetInt(PREF_PRESET_INDEX, -1)
+            : -1;
+
+    public Sprite GetPresetAvatar(int index)
+    {
+        if (presetAvatars == null || index < 0 || index >= presetAvatars.Length) return null;
+        return presetAvatars[index];
+    }
 
     private void ApplySprite(Sprite sprite)
     {

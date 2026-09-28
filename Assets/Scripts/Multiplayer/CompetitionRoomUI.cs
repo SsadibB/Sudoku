@@ -52,6 +52,8 @@ public class CompetitionRoomUI : MonoBehaviour
     private Coroutine copiedFeedbackCoroutine;
     private Coroutine pastedFeedbackCoroutine;
     private Coroutine holdHintCoroutine;
+    private PlayerSearchVisuals hostWaitVisuals;
+    private bool hostSelected;
 
     private void Awake()
     {
@@ -79,6 +81,9 @@ public class CompetitionRoomUI : MonoBehaviour
         // Hide copy feedback label initially.
         if (copiedFeedbackText != null)
             copiedFeedbackText.gameObject.SetActive(false);
+
+        if (hostWaitGroup != null)
+            hostWaitVisuals = PlayerSearchVisuals.Bind(hostWaitGroup.transform);
     }
 
     // ---- Room code tap & hold copy ----
@@ -355,7 +360,6 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerManager.Instance.OnConnectionFailed  += OnConnectionFailed;
         }
         SetButtonsInteractable(true);
-        ShowModeChooser();
     }
 
     private void OnDisable()
@@ -397,12 +401,44 @@ public class CompetitionRoomUI : MonoBehaviour
 
     // ---- Sub-group helpers ----
 
-    private void ShowModeChooser()
+    public void HidePanelsForSearch()
     {
-        SetGroupActive(modeChooserGroup, true);
+        if (competitionPanel != null) competitionPanel.SetActive(false);
         SetGroupActive(hostDifficultyGroup, false);
         SetGroupActive(hostWaitGroup, false);
         SetGroupActive(joinGroup, false);
+        SetGroupActive(modeChooserGroup, false);
+        hostWaitVisuals?.Stop();
+    }
+
+    public void ReturnToHostJoin()
+    {
+        hostSelected = false;
+        hostWaitVisuals?.Stop();
+        if (competitionPanel != null) competitionPanel.SetActive(true);
+        ShowModeChooser();
+    }
+
+    private void ShowModeChooser()
+    {
+        SetGroupActive(modeChooserGroup, true);
+        SetGroupActive(hostWaitGroup, false);
+        SetGroupActive(joinGroup, false);
+        hostWaitVisuals?.Stop();
+        ShowHostDifficulty(dimmed: !hostSelected);
+        ButtonSelectionVisual.Apply(hostSelected ? hostButton : null, hostButton, joinButton);
+    }
+
+    private void ShowHostDifficulty(bool dimmed)
+    {
+        if (hostDifficultyGroup == null) return;
+        hostDifficultyGroup.SetActive(true);
+
+        CanvasGroup cg = hostDifficultyGroup.GetComponent<CanvasGroup>();
+        if (cg == null) cg = hostDifficultyGroup.AddComponent<CanvasGroup>();
+        cg.alpha = dimmed ? 0.38f : 1f;
+        cg.interactable = !dimmed;
+        cg.blocksRaycasts = !dimmed;
     }
 
     private void SetGroupActive(GameObject g, bool active)
@@ -423,7 +459,7 @@ public class CompetitionRoomUI : MonoBehaviour
             bg1.SetActive(!isHostWaitActive);
 
         if (backButton != null)
-            backButton.gameObject.SetActive(!isHostWaitActive);
+            backButton.gameObject.SetActive(true);
     }
 
     private void EnsureBg1Reference()
@@ -448,20 +484,31 @@ public class CompetitionRoomUI : MonoBehaviour
     private void OnHostClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
-        SetGroupActive(modeChooserGroup, false);
-        SetGroupActive(hostDifficultyGroup, true);
+        hostSelected = true;
+        ButtonSelectionVisual.Apply(hostButton, hostButton, joinButton);
+        ShowHostDifficulty(dimmed: false);
     }
 
     private void OnHostDifficultySelected(UIManager.Difficulty difficulty)
     {
         SoundManager.Instance?.PlaySFX(UIManager.GetDifficultyButtonSfxId(difficulty));
         selectedHostDifficulty = difficulty;
+        Button selected = difficulty == UIManager.Difficulty.Easy ? hostEasyButton
+            : difficulty == UIManager.Difficulty.Medium ? hostMediumButton
+            : hostHardButton;
+        ButtonSelectionVisual.Apply(selected, hostEasyButton, hostMediumButton, hostHardButton);
+
         SetButtonsInteractable(false);
+        if (competitionPanel != null) competitionPanel.SetActive(false);
         SetGroupActive(hostDifficultyGroup, false);
+        SetGroupActive(modeChooserGroup, false);
         SetGroupActive(hostWaitGroup, true);
 
         if (hostStatusText != null) hostStatusText.text = "Creating room…";
         if (roomCodeText != null)   roomCodeText.text = "------";
+        hostWaitVisuals?.ShowLocal(MultiplayerManager.Instance != null ? MultiplayerManager.Instance.LocalPlayerName : "You",
+            ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null);
+        hostWaitVisuals?.BeginSearching();
 
         _ = CreateRoomAsync(difficulty);
     }
@@ -492,14 +539,26 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private void OnOpponentJoined()
     {
-        if (hostStatusText != null) hostStatusText.text = "Opponent joined! Starting…";
+        if (hostStatusText != null) hostStatusText.text = "Opponent joined!";
+
+        var mp = MultiplayerManager.Instance;
+        string opponentName = mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent";
+        Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
+        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
+
+        if (MultiplayerLobbyUI.Instance != null)
+        {
+            MultiplayerLobbyUI.Instance.ShowCompetitionSearching();
+            MultiplayerLobbyUI.Instance.PresentOpponentFound();
+        }
     }
 
     private void OnCancelHostClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
         MultiplayerManager.Instance?.Disconnect();
-        ShowModeChooser();
+        SetButtonsInteractable(true);
+        ReturnToHostJoin();
     }
 
     // ---- Join flow ----
@@ -507,7 +566,12 @@ public class CompetitionRoomUI : MonoBehaviour
     private void OnJoinClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
+        hostSelected = false;
+        ButtonSelectionVisual.Apply(joinButton, hostButton, joinButton);
+        ShowHostDifficulty(dimmed: true);
+        if (competitionPanel != null) competitionPanel.SetActive(false);
         SetGroupActive(modeChooserGroup, false);
+        SetGroupActive(hostDifficultyGroup, false);
         SetGroupActive(joinGroup, true);
         if (joinStatusText != null)      joinStatusText.text = "";
         if (guestDifficultyText != null) guestDifficultyText.text = "";
@@ -535,6 +599,8 @@ public class CompetitionRoomUI : MonoBehaviour
         if (joinStatusText != null)         joinStatusText.text = "Joining…";
         if (joinConfirmButton != null)      joinConfirmButton.interactable = false;
 
+        SetGroupActive(joinGroup, false);
+        MultiplayerLobbyUI.Instance?.ShowCompetitionSearching();
         MultiplayerManager.Instance?.JoinCompetitionRoom(code);
     }
 
@@ -556,7 +622,7 @@ public class CompetitionRoomUI : MonoBehaviour
         if (joinConfirmButton != null) joinConfirmButton.interactable = true;
         if (joinStatusText != null)    joinStatusText.text = "";
 
-        ShowModeChooser();
+        ReturnToHostJoin();
     }
 
     // ---- Back ----
@@ -564,9 +630,21 @@ public class CompetitionRoomUI : MonoBehaviour
     private void OnBackClicked()
     {
         SoundManager.Instance?.PlaySFX("Button");
+
+        bool inSubView = (hostWaitGroup != null && hostWaitGroup.activeSelf)
+            || (joinGroup != null && joinGroup.activeSelf);
+
+        if (inSubView)
+        {
+            MultiplayerManager.Instance?.Disconnect();
+            SetButtonsInteractable(true);
+            if (joinConfirmButton != null) joinConfirmButton.interactable = true;
+            ReturnToHostJoin();
+            return;
+        }
+
         MultiplayerManager.Instance?.Disconnect();
         Hide();
-        // Notify the MultiplayerLobbyUI to reshow its mode panel
         MultiplayerLobbyUI.Instance?.ShowModePanel();
     }
 }

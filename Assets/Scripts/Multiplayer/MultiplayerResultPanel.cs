@@ -32,12 +32,18 @@ public class MultiplayerResultPanel : MonoBehaviour
     [SerializeField] private float animDuration = 0.45f;
 
     private Sequence panelSequence;
+    private bool leavingToMenu;
+    private bool showing;
+    private float shownLocalTime;
 
     private void Awake()
     {
         if (panelRoot != null && panelRoot != gameObject) panelRoot.SetActive(false);
         if (returnToMenuButton != null) returnToMenuButton.onClick.AddListener(OnReturnToMenu);
         if (playAgainButton != null)    playAgainButton.onClick.AddListener(OnPlayAgain);
+
+        if (MultiplayerManager.Instance != null)
+            MultiplayerManager.Instance.OnRematchStateChanged += OnRematchStateChanged;
     }
 
     private void OnDestroy()
@@ -45,6 +51,8 @@ public class MultiplayerResultPanel : MonoBehaviour
         panelSequence?.Kill();
         if (returnToMenuButton != null) returnToMenuButton.onClick.RemoveListener(OnReturnToMenu);
         if (playAgainButton != null)    playAgainButton.onClick.RemoveListener(OnPlayAgain);
+        if (MultiplayerManager.Instance != null)
+            MultiplayerManager.Instance.OnRematchStateChanged -= OnRematchStateChanged;
     }
 
     /// <summary>Show the result panel.</summary>
@@ -53,7 +61,15 @@ public class MultiplayerResultPanel : MonoBehaviour
     public void Show(bool isWinner, float localTime)
     {
         gameObject.SetActive(true);
+        showing = true;
+        shownLocalTime = localTime;
         if (panelRoot == null) panelRoot = gameObject;
+
+        if (MultiplayerManager.Instance != null)
+        {
+            MultiplayerManager.Instance.OnRematchStateChanged -= OnRematchStateChanged;
+            MultiplayerManager.Instance.OnRematchStateChanged += OnRematchStateChanged;
+        }
 
         // Banner
         if (winnerBanner != null) winnerBanner.SetActive(isWinner);
@@ -96,8 +112,16 @@ public class MultiplayerResultPanel : MonoBehaviour
             .Join(panelCG != null ? panelCG.DOFade(1f, animDuration) : null)
             .SetLink(panelRoot);
 
+        FillMatchStats(isWinner, localTime);
+
         // Play sound
         SoundManager.Instance?.PlaySFX(isWinner ? "Victory" : "GameOver");
+    }
+
+    private void Update()
+    {
+        if (!showing || panelRoot == null || !panelRoot.activeInHierarchy) return;
+        FillMatchStats(false, shownLocalTime);
     }
 
     // ---- Button handlers ----
@@ -105,6 +129,22 @@ public class MultiplayerResultPanel : MonoBehaviour
     private void OnReturnToMenu()
     {
         SoundManager.Instance?.PlaySFX("Button");
+        if (returnToMenuButton != null) returnToMenuButton.interactable = false;
+
+        RewardedAdManager.EnsureInstance();
+        if (RewardedAdManager.Instance == null)
+        {
+            GoHome();
+            return;
+        }
+
+        RewardedAdManager.Instance.ShowRewardedAd(null, GoHome, GoHome);
+    }
+
+    private void GoHome()
+    {
+        if (leavingToMenu) return;
+        leavingToMenu = true;
         MultiplayerManager.Instance?.Disconnect();
         SceneManager.LoadScene("MainMenu");
     }
@@ -112,9 +152,89 @@ public class MultiplayerResultPanel : MonoBehaviour
     private void OnPlayAgain()
     {
         SoundManager.Instance?.PlaySFX("Button");
-        // Disconnect and go back to MainMenu lobby
-        MultiplayerManager.Instance?.Disconnect();
-        SceneManager.LoadScene("MainMenu");
+        if (playAgainButton != null) playAgainButton.interactable = false;
+        SetWaitingForRematch();
+        MultiplayerManager.Instance?.RequestRematch();
+    }
+
+    private void OnRematchStateChanged()
+    {
+        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.BothWantRematch)
+            MultiplayerManager.Instance.LoadRematchLobby();
+    }
+
+    private void SetWaitingForRematch()
+    {
+        if (resultTitleText != null)
+            resultTitleText.text = "Waiting for opponent to rematch...";
+
+        if (panelRoot == null) return;
+        foreach (var text in panelRoot.GetComponentsInChildren<TMP_Text>(true))
+        {
+            if (text.gameObject.name == "Output_Text (TMP)")
+                text.text = "Waiting for your opponent to rematch.";
+        }
+    }
+
+    private void FillMatchStats(bool isWinner, float localTime)
+    {
+        if (panelRoot == null) return;
+
+        var local = NetworkSudokuPlayer.Local;
+        var remote = NetworkSudokuPlayer.Remote;
+        int localScore = SudokuGameManager.Instance != null ? SudokuGameManager.Instance.SessionScore : (local != null ? local.Score : 0);
+        int localLives = local != null ? local.HalfHearts / 2 : (SudokuGameManager.Instance != null ? SudokuGameManager.Instance.CurrentHalfHearts / 2 : 0);
+        int remoteScore = remote != null ? remote.Score : 0;
+        float remoteTime = remote != null ? remote.ElapsedTime : 0f;
+        int remoteLives = remote != null ? remote.HalfHearts / 2 : 0;
+
+        SetStat(panelRoot.transform, "PlayerStats", localScore, localTime, localLives);
+        SetStat(panelRoot.transform, "OpponentStats", remoteScore, remoteTime, remoteLives);
+    }
+
+    private static void SetStat(Transform root, string sideName, int score, float time, int lives)
+    {
+        Transform side = null;
+        foreach (var t in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (t.name == sideName)
+            {
+                side = t;
+                break;
+            }
+        }
+        if (side == null) return;
+
+        SetNamedValue(side, "ScoreStats", score.ToString());
+        SetNamedValue(side, "TimeStats", FormatClock(time));
+        SetNamedValue(side, "LivesStats", lives.ToString());
+    }
+
+    private static void SetNamedValue(Transform side, string statName, string value)
+    {
+        Transform stat = side.Find(statName);
+        if (stat == null)
+        {
+            foreach (var t in side.GetComponentsInChildren<Transform>(true))
+            {
+                if (t.name == statName)
+                {
+                    stat = t;
+                    break;
+                }
+            }
+        }
+        if (stat == null) return;
+
+        TMP_Text[] texts = stat.GetComponentsInChildren<TMP_Text>(true);
+        if (texts.Length == 0) return;
+        texts[texts.Length - 1].text = value;
+    }
+
+    private static string FormatClock(float seconds)
+    {
+        int total = Mathf.Max(0, Mathf.RoundToInt(seconds));
+        return $"{total / 60:00}:{total % 60:00}";
     }
 
     // ---- Helpers ----

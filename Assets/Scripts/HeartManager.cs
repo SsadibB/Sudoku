@@ -114,6 +114,21 @@ public class HeartManager : MonoBehaviour
         ResetAllHats();
     }
 
+    public void BindLifeSlots(GameObject[] slots)
+    {
+        if (slots == null || slots.Length == 0) return;
+        lifeSlots = slots;
+        UpdateUI();
+    }
+
+    public void RestoreOneLife()
+    {
+        if (CurrentLives >= MaxLives) return;
+        CurrentLives++;
+        UpdateUI();
+        OnHalfHeartDeducted?.Invoke(CurrentHalfHearts);
+    }
+
     // Snaps every hat back to its start pose, fully visible, with no
     // animation - used at the start of a new game.
     private void ResetAllHats()

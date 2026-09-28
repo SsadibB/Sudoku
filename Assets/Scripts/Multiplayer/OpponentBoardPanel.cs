@@ -24,6 +24,8 @@ public class OpponentBoardPanel : MonoBehaviour
 
     [Header("Header")]
     [SerializeField] private TMP_Text opponentNameText;
+    [SerializeField] private TMP_Text opponentLevelText;
+    [SerializeField] private Image opponentAvatarImage;
     [SerializeField] private TMP_Text opponentProgressText;
     [SerializeField] private TMP_Text opponentScoreText;
     [SerializeField] private TMP_Text opponentLivesText;
@@ -265,6 +267,93 @@ public class OpponentBoardPanel : MonoBehaviour
         fadeTween?.Kill();
     }
 
+    private void ApplyOpponentIdentity(NetworkSudokuPlayer remote)
+    {
+        EnsureOpponentHeader();
+
+        int level = remote != null && remote.ProfileLevel > 0
+            ? remote.ProfileLevel
+            : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentProfileLevel : 1);
+
+        if (opponentLevelText != null)
+            opponentLevelText.text = $"Level {Mathf.Max(1, level):00}";
+
+        if (opponentAvatarImage == null) return;
+
+        Sprite avatar = null;
+        if (remote != null && ProfileManager.Instance != null)
+            avatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
+        if (avatar == null && MultiplayerManager.Instance != null)
+            avatar = MultiplayerManager.Instance.GetOpponentAvatar();
+        if (avatar != null)
+            opponentAvatarImage.sprite = avatar;
+    }
+
+    private void EnsureOpponentHeader()
+    {
+        if (panelRoot == null) return;
+
+        if (opponentLevelText == null && opponentNameText != null)
+        {
+            Transform existing = opponentNameText.transform.parent.Find("OpponentLevelText");
+            if (existing == null)
+            {
+                var go = new GameObject("OpponentLevelText", typeof(RectTransform));
+                go.transform.SetParent(opponentNameText.transform.parent, false);
+                var rt = go.GetComponent<RectTransform>();
+                rt.anchorMin = opponentNameText.rectTransform.anchorMin;
+                rt.anchorMax = opponentNameText.rectTransform.anchorMax;
+                rt.pivot = opponentNameText.rectTransform.pivot;
+                rt.sizeDelta = opponentNameText.rectTransform.sizeDelta;
+                rt.anchoredPosition = opponentNameText.rectTransform.anchoredPosition + new Vector2(0f, -36f);
+                var tmp = go.AddComponent<TextMeshProUGUI>();
+                tmp.font = opponentNameText.font;
+                tmp.fontSize = Mathf.Max(18f, opponentNameText.fontSize * 0.7f);
+                tmp.alignment = TextAlignmentOptions.Center;
+                tmp.color = headerNameColor;
+                tmp.raycastTarget = false;
+                opponentLevelText = tmp;
+            }
+            else
+            {
+                opponentLevelText = existing.GetComponent<TMP_Text>();
+            }
+        }
+
+        if (opponentAvatarImage == null)
+        {
+            Transform existing = panelRoot.transform.Find("OpponentAvatar");
+            if (existing == null && opponentNameText != null)
+                existing = opponentNameText.transform.parent.Find("OpponentAvatar");
+            if (existing == null && opponentNameText != null)
+            {
+                var go = new GameObject("OpponentAvatar", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+                go.transform.SetParent(opponentNameText.transform.parent, false);
+                var rt = go.GetComponent<RectTransform>();
+                rt.anchorMin = new Vector2(0.5f, 0.5f);
+                rt.anchorMax = new Vector2(0.5f, 0.5f);
+                rt.sizeDelta = new Vector2(72f, 72f);
+                rt.anchoredPosition = opponentNameText.rectTransform.anchoredPosition + new Vector2(-120f, 0f);
+                var image = go.GetComponent<Image>();
+                image.preserveAspect = true;
+                image.raycastTarget = false;
+                opponentAvatarImage = image;
+            }
+            else if (existing != null)
+            {
+                opponentAvatarImage = existing.GetComponent<Image>();
+            }
+        }
+
+        var hearts = FindAnyObjectByType<HeartManager>();
+        if (hearts != null)
+        {
+            if (fullHeartSprite == null) fullHeartSprite = hearts.FullHeartSprite;
+            if (halfHeartSprite == null) halfHeartSprite = hearts.HalfHeartSprite;
+            if (emptyHeartSprite == null) emptyHeartSprite = hearts.EmptyHeartSprite;
+        }
+    }
+
     private void UpdateHeartSlots(int halfHearts)
     {
         if (opponentHeartSlots == null || opponentHeartSlots.Length == 0) return;
@@ -312,6 +401,8 @@ public class OpponentBoardPanel : MonoBehaviour
                 opponentNameText.text = string.IsNullOrEmpty(pName) ? "Opponent" : pName;
                 opponentNameText.color = headerNameColor;
             }
+
+            ApplyOpponentIdentity(remote);
 
             if (opponentProgressText != null)
             {
