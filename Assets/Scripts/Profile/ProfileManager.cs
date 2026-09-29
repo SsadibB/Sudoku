@@ -52,6 +52,11 @@ public class ProfileManager : MonoBehaviour
     [Header("Actions")]
     [SerializeField] private Button uploadButton;
 
+    [Header("Player Name")]
+    [SerializeField] private TMP_Text nameText;
+    [SerializeField] private Button editNameButton;
+    [SerializeField] private TMP_InputField nameInput;
+
     [Header("Random Avatars")]
     [SerializeField] private Sprite[] presetAvatars;
 
@@ -81,9 +86,8 @@ public class ProfileManager : MonoBehaviour
     public string PlayerName { get; private set; } = "Player";
     public event System.Action<string> OnPlayerNameChanged;
 
-    private TMP_InputField nameInput;
-    private TMP_Text profileNameLabel;
-    private GameObject nameSetupPanel;
+    private bool editingName;
+    private int ignoreEditClickFrame = -1;
     public int CurrentXP { get; private set; }
     public int XPRequiredForCurrentLevel => GetXPRequiredForLevel(ProfileLevel);
 
@@ -171,7 +175,7 @@ public class ProfileManager : MonoBehaviour
         LoadPlayerName();
         if (MultiplayerManager.Instance != null)
             MultiplayerManager.Instance.SetLocalPlayerName(PlayerName);
-        EnsureNameField();
+        WireNameEditing();
         ApplyPlayerNameToLabels();
 
         // Belt-and-suspenders: catches any scene-loaded case not already
@@ -184,6 +188,9 @@ public class ProfileManager : MonoBehaviour
     private void Start()
     {
         LoadSavedProfilePicture();
+        // InputField.OnEnable can overwrite the label after Awake. Push the
+        // saved name again once every UI component has enabled.
+        ApplyPlayerNameToLabels();
     }
 
     private void OnDestroy()
@@ -200,6 +207,7 @@ public class ProfileManager : MonoBehaviour
     // missing panel is not worth a warning.
     private void CloseIfPresent()
     {
+        if (editingName) CommitNameEdit();
         if (profilePanel != null) profilePanel.SetActive(false);
     }
 
@@ -214,6 +222,7 @@ public class ProfileManager : MonoBehaviour
         if (profileIconButton != null) profileIconButton.onClick.RemoveListener(OpenPanel);
         if (closeButton != null) closeButton.onClick.RemoveListener(ClosePanel);
         if (uploadButton != null) uploadButton.onClick.RemoveListener(OnUploadClicked);
+        UnwireNameEditing();
 
         profilePanel = fresh.profilePanel;
         profileIconButton = fresh.profileIconButton;
@@ -221,6 +230,10 @@ public class ProfileManager : MonoBehaviour
         profileIconImage = fresh.profileIconImage;
         profilePreviewImage = fresh.profilePreviewImage;
         uploadButton = fresh.uploadButton;
+        nameText = fresh.nameText;
+        editNameButton = fresh.editNameButton;
+        nameInput = fresh.nameInput;
+        editingName = false;
 
         easyHighScoreText = fresh.easyHighScoreText;
         mediumHighScoreText = fresh.mediumHighScoreText;
@@ -232,12 +245,12 @@ public class ProfileManager : MonoBehaviour
         if (profileIconButton != null) profileIconButton.onClick.AddListener(OpenPanel);
         if (closeButton != null) closeButton.onClick.AddListener(ClosePanel);
         if (uploadButton != null) uploadButton.onClick.AddListener(OnUploadClicked);
+        WireNameEditing();
 
         // Push the avatar that's already loaded onto the fresh Image refs,
         // and the current stats onto the fresh Text refs — both existed
         // before this reload and otherwise wouldn't show until they changed.
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
-        EnsureNameField();
         ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
 
@@ -262,7 +275,6 @@ public class ProfileManager : MonoBehaviour
     {
         Debug.Log($"[ProfileManager] OpenPanel() called. Frame: {Time.frameCount}");
         if (profilePanel != null) profilePanel.SetActive(true);
-        EnsureNameField();
         ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
     }
@@ -273,9 +285,9 @@ public class ProfileManager : MonoBehaviour
 
         name = name.Trim();
         if (name.Length > 16) name = name.Substring(0, 16);
-        if (name == PlayerName) 
+        if (name == PlayerName)
         {
-            CloseNameSetup();
+            ApplyPlayerNameToLabels();
             return;
         }
 
@@ -287,8 +299,6 @@ public class ProfileManager : MonoBehaviour
 
         if (MultiplayerManager.Instance != null)
             MultiplayerManager.Instance.SetLocalPlayerName(PlayerName);
-
-        CloseNameSetup();
     }
 
     private void LoadPlayerName()
@@ -311,99 +321,103 @@ public class ProfileManager : MonoBehaviour
         PlayerName = "Player";
     }
 
-    private void EnsureNameField()
+    private void WireNameEditing()
     {
-        if (profilePanel == null) return;
-
-        if (profileNameLabel == null)
+        if (editNameButton != null)
         {
-            Transform label = FindChildNamed(profilePanel.transform, "ProfileNameText");
-            if (label != null) profileNameLabel = label.GetComponent<TMP_Text>();
+            editNameButton.onClick.RemoveListener(OnEditNameClicked);
+            editNameButton.onClick.AddListener(OnEditNameClicked);
         }
 
-        if (nameSetupPanel == null)
-        {
-            Transform setup = FindChildNamed(profilePanel.transform, "NameSetupPanel");
-            if (setup != null) nameSetupPanel = setup.gameObject;
-        }
+        if (nameInput == null) return;
 
-        if (nameInput == null)
-            nameInput = profilePanel.GetComponentInChildren<TMP_InputField>(true);
-
-        bool inputIsHiddenDialog = nameInput != null && nameSetupPanel != null
-            && nameInput.transform.IsChildOf(nameSetupPanel.transform);
-        if (nameInput == null || inputIsHiddenDialog)
-        {
-            Transform inline = profilePanel.transform.Find("PlayerNameInput");
-            TMP_InputField inlineInput = inline != null ? inline.GetComponent<TMP_InputField>() : null;
-            if (inlineInput == null)
-                inlineInput = CreateNameInput(profilePanel.transform);
-
-            if (inputIsHiddenDialog)
-            {
-                nameInput.onEndEdit.RemoveListener(SetPlayerName);
-                nameInput.onEndEdit.AddListener(SetPlayerName);
-            }
-
-            nameInput = inlineInput;
-        }
-
-        nameInput.onEndEdit.RemoveListener(SetPlayerName);
-        nameInput.onEndEdit.AddListener(SetPlayerName);
+        nameInput.onEndEdit.RemoveListener(OnNameEndEdit);
+        nameInput.onEndEdit.AddListener(OnNameEndEdit);
+        nameInput.onSubmit.RemoveListener(OnNameEndEdit);
+        nameInput.onSubmit.AddListener(OnNameEndEdit);
         nameInput.characterLimit = 16;
+        nameInput.lineType = TMP_InputField.LineType.SingleLine;
+        nameInput.readOnly = !editingName;
+    }
 
-        Transform confirm = FindChildNamed(profilePanel.transform, "Btn_Confirm");
-        if (confirm != null)
+    private void UnwireNameEditing()
+    {
+        if (editNameButton != null) editNameButton.onClick.RemoveListener(OnEditNameClicked);
+        if (nameInput != null)
         {
-            Button button = confirm.GetComponent<Button>();
-            if (button == null) button = confirm.gameObject.AddComponent<Button>();
-            button.onClick.RemoveListener(ConfirmNameFromInput);
-            button.onClick.AddListener(ConfirmNameFromInput);
-        }
-
-        if (profileNameLabel != null)
-        {
-            Button nameButton = profileNameLabel.GetComponent<Button>();
-            if (nameButton == null && nameSetupPanel != null)
-                nameButton = profileNameLabel.gameObject.AddComponent<Button>();
-            if (nameButton != null)
-            {
-                nameButton.onClick.RemoveListener(OpenNameSetup);
-                nameButton.onClick.AddListener(OpenNameSetup);
-            }
+            nameInput.onEndEdit.RemoveListener(OnNameEndEdit);
+            nameInput.onSubmit.RemoveListener(OnNameEndEdit);
         }
     }
 
-    private void ConfirmNameFromInput()
+    private void OnEditNameClicked()
     {
-        if (nameInput != null) SetPlayerName(nameInput.text);
+        // Ending the field (clicking Edit again, or pressing Enter) also
+        // delivers this click. Saving already happened in OnNameEndEdit.
+        if (ignoreEditClickFrame == Time.frameCount) return;
+
+        if (editingName)
+            CommitNameEdit();
+        else
+            BeginNameEdit();
     }
 
-    private void OpenNameSetup()
+    private void BeginNameEdit()
     {
-        if (nameSetupPanel != null) nameSetupPanel.SetActive(true);
-        if (nameInput != null) nameInput.text = PlayerName;
+        if (nameInput == null) return;
+
+        editingName = true;
+        nameInput.readOnly = false;
+        nameInput.interactable = true;
+        nameInput.text = PlayerName;
+        nameInput.ActivateInputField();
     }
 
-    private void CloseNameSetup()
+    private void OnNameEndEdit(string value)
     {
-        if (nameSetupPanel != null) nameSetupPanel.SetActive(false);
+        if (!editingName) return;
+        CommitNameEdit();
+    }
+
+    private void CommitNameEdit()
+    {
+        if (!editingName) return;
+
+        editingName = false;
+        ignoreEditClickFrame = Time.frameCount;
+
+        string value = nameInput != null ? nameInput.text : string.Empty;
+        if (nameInput != null)
+        {
+            nameInput.readOnly = true;
+            nameInput.DeactivateInputField();
+        }
+
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            ApplyPlayerNameToLabels();
+            return;
+        }
+
+        SetPlayerName(value);
     }
 
     private void ApplyPlayerNameToLabels()
     {
-        if (profileNameLabel != null) profileNameLabel.text = PlayerName;
-        if (nameInput != null && nameInput.text != PlayerName) nameInput.text = PlayerName;
+        if (!editingName)
+        {
+            if (nameInput != null)
+                nameInput.text = PlayerName;
+            else if (nameText != null)
+                nameText.text = PlayerName;
+        }
 
         TMP_Text[] labels = Resources.FindObjectsOfTypeAll<TMP_Text>();
         for (int i = 0; i < labels.Length; i++)
         {
             if (labels[i] == null || !labels[i].gameObject.scene.IsValid()) continue;
-            if (labels[i].gameObject.name == "ProfileNameText")
-            {
-                labels[i].text = PlayerName;
-                continue;
-            }
+            if (nameText != null && labels[i] == nameText) continue;
+            if (nameInput != null && labels[i] == nameInput.textComponent) continue;
 
             if (labels[i].gameObject.name == "Name_Text (TMP)"
                 && labels[i].transform.parent != null
@@ -414,70 +428,9 @@ public class ProfileManager : MonoBehaviour
         }
     }
 
-    private static TMP_InputField CreateNameInput(Transform parent)
-    {
-        var root = new GameObject("PlayerNameInput", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(TMP_InputField));
-        root.transform.SetParent(parent, false);
-        var rt = root.GetComponent<RectTransform>();
-        rt.anchorMin = new Vector2(0.5f, 1f);
-        rt.anchorMax = new Vector2(0.5f, 1f);
-        rt.pivot = new Vector2(0.5f, 1f);
-        rt.anchoredPosition = new Vector2(0f, -70f);
-        rt.sizeDelta = new Vector2(560f, 78f);
-
-        var background = root.GetComponent<Image>();
-        background.color = new Color(1f, 1f, 1f, 0.92f);
-
-        var textGo = new GameObject("Text", typeof(RectTransform));
-        textGo.transform.SetParent(root.transform, false);
-        var textRt = textGo.GetComponent<RectTransform>();
-        textRt.anchorMin = Vector2.zero;
-        textRt.anchorMax = Vector2.one;
-        textRt.offsetMin = new Vector2(16f, 8f);
-        textRt.offsetMax = new Vector2(-16f, -8f);
-        var text = textGo.AddComponent<TextMeshProUGUI>();
-        text.fontSize = 36f;
-        text.alignment = TextAlignmentOptions.Center;
-        text.color = new Color(0.25f, 0.16f, 0.08f, 1f);
-        text.raycastTarget = false;
-
-        var placeholderGo = new GameObject("Placeholder", typeof(RectTransform));
-        placeholderGo.transform.SetParent(root.transform, false);
-        var placeholderRt = placeholderGo.GetComponent<RectTransform>();
-        placeholderRt.anchorMin = Vector2.zero;
-        placeholderRt.anchorMax = Vector2.one;
-        placeholderRt.offsetMin = new Vector2(16f, 8f);
-        placeholderRt.offsetMax = new Vector2(-16f, -8f);
-        var placeholder = placeholderGo.AddComponent<TextMeshProUGUI>();
-        placeholder.fontSize = 32f;
-        placeholder.fontStyle = FontStyles.Italic;
-        placeholder.alignment = TextAlignmentOptions.Center;
-        placeholder.color = new Color(0.25f, 0.16f, 0.08f, 0.45f);
-        placeholder.text = "Enter your name";
-        placeholder.raycastTarget = false;
-
-        var input = root.GetComponent<TMP_InputField>();
-        input.textViewport = textRt;
-        input.textComponent = text;
-        input.placeholder = placeholder;
-        input.characterLimit = 16;
-        return input;
-    }
-
-    private static Transform FindChildNamed(Transform root, string childName)
-    {
-        if (root == null) return null;
-        if (root.name == childName) return root;
-        for (int i = 0; i < root.childCount; i++)
-        {
-            Transform found = FindChildNamed(root.GetChild(i), childName);
-            if (found != null) return found;
-        }
-        return null;
-    }
-
     private void ClosePanel()
     {
+        if (editingName) CommitNameEdit();
         if (profilePanel != null)
         {
             profilePanel.SetActive(false);
