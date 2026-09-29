@@ -54,6 +54,7 @@ public class CompetitionRoomUI : MonoBehaviour
     private Coroutine holdHintCoroutine;
     private PlayerSearchVisuals hostWaitVisuals;
     private bool hostSelected;
+    private bool hostSlotVisible;
 
     private void Awake()
     {
@@ -357,6 +358,7 @@ public class CompetitionRoomUI : MonoBehaviour
         {
             MultiplayerManager.Instance.OnRoomCodeGenerated += OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    += OnOpponentJoined;
+            MultiplayerManager.Instance.OnOpponentIdentity  += OnOpponentIdentity;
             MultiplayerManager.Instance.OnConnectionFailed  += OnConnectionFailed;
         }
         SetButtonsInteractable(true);
@@ -368,6 +370,7 @@ public class CompetitionRoomUI : MonoBehaviour
         {
             MultiplayerManager.Instance.OnRoomCodeGenerated -= OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    -= OnOpponentJoined;
+            MultiplayerManager.Instance.OnOpponentIdentity  -= OnOpponentIdentity;
             MultiplayerManager.Instance.OnConnectionFailed  -= OnConnectionFailed;
         }
     }
@@ -413,6 +416,7 @@ public class CompetitionRoomUI : MonoBehaviour
 
     public void ReturnToHostJoin()
     {
+        hostSlotVisible = false;
         hostSelected = false;
         hostWaitVisuals?.Stop();
         if (competitionPanel != null) competitionPanel.SetActive(true);
@@ -503,11 +507,11 @@ public class CompetitionRoomUI : MonoBehaviour
         SetGroupActive(hostDifficultyGroup, false);
         SetGroupActive(modeChooserGroup, false);
         SetGroupActive(hostWaitGroup, true);
+        hostSlotVisible = true;
 
         if (hostStatusText != null) hostStatusText.text = "Creating room…";
         if (roomCodeText != null)   roomCodeText.text = "------";
-        hostWaitVisuals?.ShowLocal(MultiplayerManager.Instance != null ? MultiplayerManager.Instance.LocalPlayerName : "You",
-            ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null);
+        ShowHostWaitLocal();
         hostWaitVisuals?.BeginSearching();
 
         _ = CreateRoomAsync(difficulty);
@@ -539,18 +543,41 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private void OnOpponentJoined()
     {
-        if (hostStatusText != null) hostStatusText.text = "Opponent joined!";
-
-        var mp = MultiplayerManager.Instance;
-        string opponentName = mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent";
-        Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
+        if (hostStatusText != null) hostStatusText.text = "Opponent Found!";
+        ShowHostWaitOpponent();
 
         if (MultiplayerLobbyUI.Instance != null)
         {
             MultiplayerLobbyUI.Instance.ShowCompetitionSearching();
             MultiplayerLobbyUI.Instance.PresentOpponentFound();
         }
+    }
+
+    private void OnOpponentIdentity()
+    {
+        if (!hostSlotVisible) return;
+        ShowHostWaitLocal();
+        ShowHostWaitOpponent();
+    }
+
+    private void ShowHostWaitLocal()
+    {
+        string localName = "You";
+        if (ProfileManager.Instance != null && !string.IsNullOrWhiteSpace(ProfileManager.Instance.PlayerName))
+            localName = ProfileManager.Instance.PlayerName;
+        else if (MultiplayerManager.Instance != null && !string.IsNullOrWhiteSpace(MultiplayerManager.Instance.LocalPlayerName))
+            localName = MultiplayerManager.Instance.LocalPlayerName;
+
+        Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
+        hostWaitVisuals?.ShowLocal(localName, localAvatar);
+    }
+
+    private void ShowHostWaitOpponent()
+    {
+        var mp = MultiplayerManager.Instance;
+        string opponentName = mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent";
+        Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
+        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
     }
 
     private void OnCancelHostClicked()

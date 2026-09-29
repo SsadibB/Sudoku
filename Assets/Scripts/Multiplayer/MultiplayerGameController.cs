@@ -25,6 +25,13 @@ public class MultiplayerGameController : MonoBehaviour
     private bool gameStarted;
     private bool isOpponentLeftHandled;
     private float gameStartTime;
+    private float _nextSpawnAttempt;
+    private bool _matchInitDone;
+    private Coroutine _awayWait;
+    private NetworkSudokuPlayer _boundLocal;
+
+    public bool IsMatchRunning => gameStarted;
+    public float MatchStartTime => gameStartTime;
 
     // ---- Spawner: NetworkSudokuPlayer prefab ----
     [Header("Prefabs")]
@@ -80,6 +87,7 @@ public class MultiplayerGameController : MonoBehaviour
 
         gameStartTime = Time.time;
         gameStarted = true;
+        MultiplayerManager.Instance?.KeepSessionAliveInBackground();
 
         StartCoroutine(InitNetworkPlayerAndBoard());
     }
@@ -103,58 +111,52 @@ public class MultiplayerGameController : MonoBehaviour
         NetworkSudokuPlayer.OnPlayerForfeited -= HandlePlayerForfeited;
     }
 
-    private void OnApplicationPause(bool paused)
+    private void OnApplicationPause(bool pause)
     {
-        // On Android, pressing the home button or switching apps pauses the app.
-        // Forfeit and disconnect so the opponent immediately gets the win.
-        if (paused && gameStarted)
-        {
-            gameStarted = false;
-            NetworkSudokuPlayer.Local?.Forfeit();
-            MultiplayerManager.Instance?.Disconnect();
-        }
+        if (!gameStarted) return;
+        MultiplayerManager.Instance?.KeepSessionAliveInBackground();
     }
 
     private void OnApplicationQuit()
     {
-        if (gameStarted)
-        {
-            gameStarted = false;
-            NetworkSudokuPlayer.Local?.Forfeit();
-        }
+        if (!gameStarted) return;
+        gameStarted = false;
+        NetworkSudokuPlayer.Local?.Forfeit();
+        MultiplayerManager.Instance?.Disconnect();
     }
 
     private void Update()
+    {
+        if (!gameStarted) return;
+        if (_matchInitDone)
+            EnsureLocalPlayer();
+
+        var remote = ResolveRemote();
+        if (remote == null) return;
+
+        if (remote.HasForfeited)
+            ConcludeOpponentGone();
+        else if (remote.IsFinished)
+        {
+            gameStarted = false;
+            float elapsed = gameManager != null
+                ? gameManager.ElapsedSeconds
+                : Mathf.Max(0f, Time.time - gameStartTime);
+            gameManager?.EndGameForMultiplayer();
+            ShowResult(isWinner: false, elapsed);
+        }
+    }
+
+    private void LateUpdate()
     {
         float elapsed = gameManager != null
             ? gameManager.ElapsedSeconds
             : Mathf.Max(0f, Time.time - gameStartTime);
 
-        if (playerSide != null)
-        {
-            if (gameStarted)
-                NetworkSudokuPlayer.Local?.UpdateElapsed(elapsed);
-            RefreshMatchHud(elapsed);
-        }
+        if (gameStarted)
+            NetworkSudokuPlayer.Local?.UpdateElapsed(elapsed);
 
-        if (!gameStarted) return;
-
-        // Watch if remote opponent finished the board or forfeited
-        var remote = ResolveRemote();
-        if (remote != null)
-        {
-            if (remote.HasForfeited)
-            {
-                // Route through the same guard as HandleOpponentLeft
-                HandleOpponentLeft();
-            }
-            else if (remote.IsFinished)
-            {
-                gameStarted = false;
-                gameManager?.EndGameForMultiplayer();
-                ShowResult(isWinner: false, elapsed);
-            }
-        }
+        RefreshMatchHud(elapsed);
     }
 
     private IEnumerator InitNetworkPlayerAndBoard()
@@ -226,17 +228,7 @@ public class MultiplayerGameController : MonoBehaviour
         }
 
         // Push the initial puzzle board into the local network snapshot
-        if (NetworkSudokuPlayer.Local != null)
-        {
-            var puzzle = gameManager.GetCurrentPuzzle();
-            if (puzzle != null)
-                NetworkSudokuPlayer.Local.InitBoardSnapshot(puzzle);
-
-            // Push the starting score and hearts so the opponent's board panel
-            // shows accurate values from the very first frame.
-            NetworkSudokuPlayer.Local.UpdateScore(gameManager.SessionScore);
-            NetworkSudokuPlayer.Local.UpdateHalfHearts(gameManager.CurrentHalfHearts);
-        }
+        PushLocalSnapshot();
 
         // Register and initialize opponent board panel
         if (opponentBoardPanel != null)
@@ -245,6 +237,8 @@ public class MultiplayerGameController : MonoBehaviour
                 opponentBoardPanel.SetBoardButton(boardButton.GetComponent<RectTransform>());
             opponentBoardPanel.Initialize();
         }
+
+        _matchInitDone = true;
     }
 
     // ---- Event handlers ----
@@ -284,11 +278,10 @@ public class MultiplayerGameController : MonoBehaviour
 
         gameManager?.EndGameForMultiplayer();
 
-        float elapsed = Time.time - gameStartTime;
+        float elapsed = gameManager != null ? gameManager.ElapsedSeconds : Mathf.Max(0f, Time.time - gameStartTime);
 
-        // The board-complete score bonus is already added to gameManager.SessionScore
-        // before OnBoardComplete fires — push the final total.
-        NetworkSudokuPlayer.Local?.UpdateScore(gameManager.SessionScore);
+        NetworkSudokuPlayer.Local?.UpdateScore(gameManager != null ? gameManager.SessionScore : 0);
+        NetworkSudokuPlayer.Local?.UpdateElapsed(elapsed);
         NetworkSudokuPlayer.Local?.MarkFinished(elapsed);
 
         // Determine winner: whoever flags Finished first wins.
@@ -298,25 +291,79 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void HandleOpponentLeft()
     {
-        // Guard: only fire once (OnOpponentLeft and HasForfeited can both trigger on disconnect)
+        if (isOpponentLeftHandled) return;
+
+        var mp = MultiplayerManager.Instance;
+        bool away = mp != null && (mp.SuppressOpponentLeft || mp.OpponentBackgrounded);
+        var remote = ResolveRemote();
+        if (away && (remote == null || !remote.HasForfeited))
+        {
+            if (_awayWait == null)
+                _awayWait = StartCoroutine(WaitForAwayOpponent());
+            return;
+        }
+
+        ConcludeOpponentGone();
+    }
+
+    private IEnumerator WaitForAwayOpponent()
+    {
+        float deadline = Time.realtimeSinceStartup + 180f;
+        while (Time.realtimeSinceStartup < deadline)
+        {
+            if (isOpponentLeftHandled)
+            {
+                _awayWait = null;
+                yield break;
+            }
+
+            var remote = ResolveRemote();
+            if (remote != null && remote.HasForfeited)
+                break;
+
+            var mp = MultiplayerManager.Instance;
+            bool weAreAway = mp != null && mp.SuppressOpponentLeft;
+            bool theyAreAway = mp != null && mp.OpponentBackgrounded;
+            bool theyAreHere = remote != null && remote.Object != null && remote.Object.IsValid && !theyAreAway;
+
+            if (!weAreAway && theyAreHere)
+            {
+                _awayWait = null;
+                yield break;
+            }
+
+            if (!weAreAway && !theyAreAway && remote == null)
+                break;
+
+            yield return null;
+        }
+
+        _awayWait = null;
+        if (!isOpponentLeftHandled)
+            ConcludeOpponentGone();
+    }
+
+    private void ConcludeOpponentGone()
+    {
         if (isOpponentLeftHandled) return;
         isOpponentLeftHandled = true;
         gameStarted = false;
+        if (_awayWait != null)
+        {
+            StopCoroutine(_awayWait);
+            _awayWait = null;
+        }
 
         gameManager?.EndGameForMultiplayer();
 
-        // Opponent disconnected/forfeited — local player wins by default
         float elapsed = Time.time - gameStartTime;
         ShowResult(isWinner: true, elapsed);
     }
 
     private void HandlePlayerForfeited(NetworkSudokuPlayer player)
     {
-        // Only react to the remote (opponent) forfeiting, not the local player's own forfeit.
         if (player == NetworkSudokuPlayer.Local) return;
-
-        // Route through the same guard as HandleOpponentLeft to avoid double-results.
-        HandleOpponentLeft();
+        ConcludeOpponentGone();
     }
 
     private void ShowResult(bool isWinner, float elapsed)
@@ -361,6 +408,52 @@ public class MultiplayerGameController : MonoBehaviour
         // already calls Disconnect() and loads MainMenu when the player taps the button.
         float elapsed = Time.time - gameStartTime;
         ShowResult(isWinner: false, elapsed);
+    }
+
+    private void EnsureLocalPlayer()
+    {
+        var local = NetworkSudokuPlayer.Local;
+        if (local != null)
+        {
+            if (_boundLocal != local)
+            {
+                _boundLocal = local;
+                PushLocalSnapshot();
+            }
+            return;
+        }
+
+        if (Time.unscaledTime < _nextSpawnAttempt) return;
+        _nextSpawnAttempt = Time.unscaledTime + 1f;
+
+        var runner = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.Runner : null;
+        if (networkPlayerPrefab == null || runner == null || !runner.IsRunning) return;
+
+        try
+        {
+            runner.SpawnAsync(networkPlayerPrefab, Vector3.zero, Quaternion.identity, runner.LocalPlayer);
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerGameController] Spawn local player error: {ex.Message}");
+        }
+    }
+
+    private void PushLocalSnapshot()
+    {
+        var local = NetworkSudokuPlayer.Local;
+        if (local == null || gameManager == null) return;
+
+        if (!gameManager.CopyLiveBoard(local))
+        {
+            var puzzle = gameManager.GetCurrentPuzzle();
+            if (puzzle != null)
+                local.InitBoardSnapshot(puzzle);
+        }
+
+        local.UpdateScore(gameManager.SessionScore);
+        local.UpdateHalfHearts(gameManager.CurrentHalfHearts);
+        local.UpdateElapsed(gameManager.ElapsedSeconds);
     }
 
     private Button FindOpponentBoardButton()
@@ -427,7 +520,8 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void RefreshMatchHud(float elapsed)
     {
-        if (playerSide == null) return;
+        if (outputOpponentStats.Count == 0)
+            CacheOutputOpponentStats();
 
         var local = NetworkSudokuPlayer.Local;
         var remote = ResolveRemote();
@@ -443,7 +537,8 @@ public class MultiplayerGameController : MonoBehaviour
         int localScore = gameManager != null ? gameManager.SessionScore : (local != null ? local.Score : 0);
         Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
 
-        ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar);
+        if (playerSide != null)
+            ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar);
 
         string remoteName = remote != null && !string.IsNullOrEmpty(remote.PlayerName.ToString())
             ? remote.PlayerName.ToString()
@@ -451,16 +546,20 @@ public class MultiplayerGameController : MonoBehaviour
         int remoteLevel = remote != null && remote.ProfileLevel > 0
             ? remote.ProfileLevel
             : (mp != null ? mp.OpponentProfileLevel : 1);
-        int remoteScore = remote != null ? remote.Score : 0;
-        float remoteTime = remote != null ? remote.ElapsedTime : 0f;
-        int remoteLives = remote != null ? Mathf.Max(0, remote.HalfHearts) / 2 : 0;
+        int remoteScore = remote != null ? remote.Score : (mp != null ? mp.OpponentLiveScore : 0);
+        float remoteTime = mp != null ? mp.OpponentElapsedSmooth : 0f;
+        if (remote != null)
+            remoteTime = Mathf.Max(remoteTime, remote.VisibleElapsed);
+        int remoteHearts = remote != null ? remote.HalfHearts : (mp != null ? mp.OpponentLiveHalfHearts : 0);
+        int remoteLives = Mathf.Max(0, remoteHearts) / 2;
         Sprite remoteAvatar = null;
         if (remote != null && ProfileManager.Instance != null)
             remoteAvatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
         if (remoteAvatar == null && mp != null)
             remoteAvatar = mp.GetOpponentAvatar();
 
-        ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar);
+        if (opponentSide != null)
+            ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar);
 
         for (int i = 0; i < outputOpponentStats.Count; i++)
             ApplyOutputOpponent(outputOpponentStats[i], remoteScore, remoteTime, remoteLives);

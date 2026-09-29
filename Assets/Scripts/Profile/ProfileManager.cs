@@ -77,6 +77,12 @@ public class ProfileManager : MonoBehaviour
     [Tooltip("Extra XP required per subsequent level, added on top of the base each time (e.g. Lvl2->3 needs baseXPRequired + this, Lvl3->4 needs baseXPRequired + 2x this, etc.)")]
     [SerializeField] private int xpIncreasePerLevel = 50;
 
+    [Header("Level Progress")]
+    [SerializeField] private TMP_Text profileLevelLabel;
+    [Tooltip("Image Type must be Filled, horizontal.")]
+    [SerializeField] private Image profileXPFillImage;
+    [SerializeField] private TMP_Text profileXPLabel;
+
     private const string ProfileLevelKey = "ProfileLevel";
     private const string ProfileXPKey = "ProfileXP";
 
@@ -191,6 +197,7 @@ public class ProfileManager : MonoBehaviour
         // InputField.OnEnable can overwrite the label after Awake. Push the
         // saved name again once every UI component has enabled.
         ApplyPlayerNameToLabels();
+        RefreshLevelDisplay();
     }
 
     private void OnDestroy()
@@ -250,9 +257,14 @@ public class ProfileManager : MonoBehaviour
         // Push the avatar that's already loaded onto the fresh Image refs,
         // and the current stats onto the fresh Text refs — both existed
         // before this reload and otherwise wouldn't show until they changed.
+        profileLevelLabel = fresh.profileLevelLabel;
+        profileXPFillImage = fresh.profileXPFillImage;
+        profileXPLabel = fresh.profileXPLabel;
+
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
         ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
+        RefreshLevelDisplay();
 
         CloseIfPresent();
         StartCoroutine(SuppressIconClickBriefly());
@@ -277,6 +289,7 @@ public class ProfileManager : MonoBehaviour
         if (profilePanel != null) profilePanel.SetActive(true);
         ApplyPlayerNameToLabels();
         RefreshStatsDisplay();
+        RefreshLevelDisplay();
     }
 
     public void SetPlayerName(string name)
@@ -704,6 +717,7 @@ public class ProfileManager : MonoBehaviour
 
         SaveProfileLevel();
         OnXPChanged?.Invoke(CurrentXP, required, ProfileLevel);
+        RefreshLevelDisplay();
     }
 
     private void SaveProfileLevel()
@@ -813,6 +827,7 @@ public class ProfileManager : MonoBehaviour
             PlayerPrefs.Save();
             OnXPChanged?.Invoke(CurrentXP, GetXPRequiredForLevel(ProfileLevel), ProfileLevel);
             RefreshStatsDisplay();
+            RefreshLevelDisplay();
         }
     }
 
@@ -854,6 +869,137 @@ public class ProfileManager : MonoBehaviour
         {
             puzzlesSolvedText.text = $"{Translate(PuzzlesSolvedLabel)}: {TotalPuzzlesSolved}";
         }
+    }
+
+    // Level badge, score-to-next-level fill, and "current/required" label
+    // on the Profile panel. Built under the existing Level row when the
+    // scene does not already have them.
+    private void RefreshLevelDisplay()
+    {
+        EnsureLevelProgressUi();
+
+        int required = GetXPRequiredForLevel(ProfileLevel);
+        if (profileLevelLabel != null)
+            profileLevelLabel.text = $"Level: {ProfileLevel:00}";
+        if (profileXPLabel != null)
+            profileXPLabel.text = $"{CurrentXP}/{required}";
+        if (profileXPFillImage != null)
+            profileXPFillImage.fillAmount = required > 0 ? Mathf.Clamp01((float)CurrentXP / required) : 0f;
+    }
+
+    private void EnsureLevelProgressUi()
+    {
+        if (profilePanel == null) return;
+
+        if (profileLevelLabel == null)
+        {
+            Transform levelText = FindNamed(profilePanel.transform, "Level_Text (TMP)");
+            if (levelText != null) profileLevelLabel = levelText.GetComponent<TMP_Text>();
+        }
+
+        if (profileXPFillImage == null)
+        {
+            Transform fill = FindNamed(profilePanel.transform, "LevelProgressFill");
+            if (fill != null) profileXPFillImage = fill.GetComponent<Image>();
+        }
+
+        if (profileXPLabel == null)
+        {
+            Transform label = FindNamed(profilePanel.transform, "LevelProgressText");
+            if (label != null) profileXPLabel = label.GetComponent<TMP_Text>();
+        }
+
+        if (profileLevelLabel == null) return;
+        if (profileXPFillImage != null && profileXPLabel != null) return;
+
+        Transform levelRoot = profileLevelLabel.transform.parent != null
+            ? profileLevelLabel.transform.parent.parent
+            : null;
+        if (levelRoot == null) return;
+
+        if (profileXPFillImage == null)
+            profileXPFillImage = CreateProgressFill(levelRoot);
+
+        if (profileXPLabel == null)
+            profileXPLabel = CreateProgressLabel(levelRoot, profileLevelLabel);
+    }
+
+    private static Image CreateProgressFill(Transform levelRoot)
+    {
+        RectTransform track = CreateUiRect("LevelProgressTrack", levelRoot, new Vector2(0f, -72f), new Vector2(300f, 18f));
+        Image trackImage = track.gameObject.AddComponent<Image>();
+        trackImage.sprite = BuiltinUiSprite();
+        trackImage.color = new Color(0.86f, 0.89f, 0.93f, 1f);
+        trackImage.raycastTarget = false;
+
+        RectTransform fillRect = CreateUiRect("LevelProgressFill", track, Vector2.zero, Vector2.zero);
+        fillRect.anchorMin = Vector2.zero;
+        fillRect.anchorMax = Vector2.one;
+        fillRect.pivot = new Vector2(0f, 0.5f);
+        fillRect.offsetMin = new Vector2(2f, 2f);
+        fillRect.offsetMax = new Vector2(-2f, -2f);
+
+        Image fill = fillRect.gameObject.AddComponent<Image>();
+        fill.sprite = BuiltinUiSprite();
+        fill.color = new Color(0.18f, 0.55f, 0.92f, 1f);
+        fill.type = Image.Type.Filled;
+        fill.fillMethod = Image.FillMethod.Horizontal;
+        fill.fillOrigin = (int)Image.OriginHorizontal.Left;
+        fill.fillAmount = 0f;
+        fill.raycastTarget = false;
+        return fill;
+    }
+
+    private static TMP_Text CreateProgressLabel(Transform levelRoot, TMP_Text styleSource)
+    {
+        RectTransform labelRect = CreateUiRect("LevelProgressText", levelRoot, new Vector2(312f, -68f), new Vector2(200f, 26f));
+        TextMeshProUGUI label = labelRect.gameObject.AddComponent<TextMeshProUGUI>();
+        if (styleSource != null)
+        {
+            label.font = styleSource.font;
+            label.color = styleSource.color;
+        }
+        label.fontSize = 22f;
+        label.alignment = TextAlignmentOptions.MidlineLeft;
+        label.raycastTarget = false;
+        label.text = "0/100";
+        return label;
+    }
+
+    private static Sprite BuiltinUiSprite()
+    {
+        Sprite builtin = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
+        if (builtin != null) return builtin;
+
+        Texture2D tex = Texture2D.whiteTexture;
+        return Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+    }
+
+    private static RectTransform CreateUiRect(string name, Transform parent, Vector2 anchoredPosition, Vector2 size)
+    {
+        GameObject go = new GameObject(name, typeof(RectTransform));
+        go.layer = parent.gameObject.layer;
+        RectTransform rect = go.GetComponent<RectTransform>();
+        rect.SetParent(parent, false);
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(0f, 1f);
+        rect.pivot = new Vector2(0f, 1f);
+        rect.anchoredPosition = anchoredPosition;
+        rect.sizeDelta = size;
+        return rect;
+    }
+
+    private static Transform FindNamed(Transform root, string objectName)
+    {
+        if (root == null) return null;
+        if (root.name == objectName) return root;
+
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindNamed(root.GetChild(i), objectName);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void SetHighScoreText(TMP_Text label, UIManager.Difficulty difficulty)

@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
@@ -12,6 +13,7 @@ using Fusion.Sockets;
 /// Singleton (DontDestroyOnLoad) that owns the Photon Fusion NetworkRunner.
 /// Handles International matchmaking and Competition room create/join.
 /// </summary>
+[DefaultExecutionOrder(-500)]
 public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 {
     private static MultiplayerManager _instance;
@@ -26,7 +28,20 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         _isQuitting = false;
     }
 
-    private void OnApplicationQuit() => _isQuitting = true;
+    private void OnApplicationQuit()
+    {
+        _isQuitting = true;
+        _intentionalLeave = true;
+        _backgrounded = false;
+        _needsRejoin = false;
+        if (IsInSession)
+        {
+            AnnounceBackground(false);
+            NetworkSudokuPlayer.Local?.Forfeit();
+            FlushFusionClient();
+        }
+        ReleaseMatchWakeLock();
+    }
 
     private void OnDestroy()
     {
@@ -93,6 +108,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private const int MaxPlayersPerRoom = 2;
 
     private Coroutine matchmakingTimeoutCoroutine;
+    private Coroutine identityResendCoroutine;
     private bool waitingForOpponent;
     private bool awaitHostStart;
     private bool sceneLoadRequested;
@@ -100,6 +116,49 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private static readonly ReliableKey IdentityKey = ReliableKey.FromInts(1, 0, 0, 0);
     private static readonly ReliableKey RematchKey = ReliableKey.FromInts(2, 0, 0, 0);
+    private static readonly ReliableKey AwayKey = ReliableKey.FromInts(3, 0, 0, 0);
+    private static readonly ReliableKey ClockKey = ReliableKey.FromInts(4, 0, 0, 0);
+
+    private string _sessionName;
+    private bool _intentionalLeave;
+    private bool _backgrounded;
+    private bool _needsRejoin;
+    private bool _opponentLeftWhileAway;
+    private int _rejoinAttempts;
+    private Photon.Realtime.ConnectionHandler _connectionHandler;
+    private AndroidJavaObject _matchWakeLock;
+
+    private int _lastClockCenti = -1;
+    private float _nextClockSend;
+    private float _opponentClockReceivedAt = -1f;
+    private float _smoothFloor;
+
+    public float OpponentElapsedSeconds { get; private set; }
+    public int OpponentLiveScore { get; private set; }
+    public int OpponentLiveHalfHearts { get; private set; } = HeartManager.MaxHalfHearts;
+    public bool OpponentBackgrounded { get; private set; }
+
+    /// <summary>
+    /// True while this device is in the background. Opponent-left events during
+    /// that window are our own link pausing, not the other player quitting.
+    /// </summary>
+    public bool SuppressOpponentLeft => _backgrounded && !_intentionalLeave;
+
+    public float OpponentElapsedSmooth
+    {
+        get
+        {
+            float value = OpponentElapsedSeconds;
+            if (_opponentClockReceivedAt >= 0f)
+                value += Mathf.Clamp(Time.unscaledTime - _opponentClockReceivedAt, 0f, 1.25f);
+
+            if (value + 1f < _smoothFloor)
+                _smoothFloor = value;
+            else if (value > _smoothFloor)
+                _smoothFloor = value;
+            return _smoothFloor;
+        }
+    }
 
     // ---- Session names ----
     // International rooms are named: "INT_{difficulty}_{shortGuid}"
@@ -124,7 +183,112 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         _instance = this;
         DontDestroyOnLoad(gameObject);
+        Application.runInBackground = true;
         RefreshLocalPlayerName();
+    }
+
+    /// <summary>
+    /// Screen-off and app background must not drop the session.
+    /// Fusion stops ticking while Unity is paused, so a fallback thread keeps
+    /// sending Photon acks and a partial wake lock keeps that thread scheduled.
+    /// </summary>
+    public void KeepSessionAliveInBackground()
+    {
+        Application.runInBackground = true;
+        AcquireMatchWakeLock();
+
+        var client = ResolveFusionClient(Runner);
+        if (client == null) return;
+
+        if (_connectionHandler == null)
+            _connectionHandler = Photon.Realtime.ConnectionHandler.BuildInstance(client, "SudokuMatch");
+
+        _connectionHandler.Client = client;
+        _connectionHandler.KeepAliveInBackground = int.MaxValue;
+    }
+
+    private void OnApplicationPause(bool pause)
+    {
+        _backgrounded = pause;
+        if (!IsMultiplayerGame || _intentionalLeave) return;
+
+        if (pause)
+        {
+            KeepSessionAliveInBackground();
+            AnnounceBackground(true);
+            FlushFusionClient();
+            return;
+        }
+
+        AnnounceBackground(false);
+        if (_opponentLeftWhileAway)
+        {
+            _opponentLeftWhileAway = false;
+            OnOpponentLeft?.Invoke();
+        }
+        if (!_needsRejoin) return;
+        _needsRejoin = false;
+        RejoinActiveSession();
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!IsMultiplayerGame || _intentionalLeave) return;
+
+        if (!hasFocus)
+        {
+            KeepSessionAliveInBackground();
+            AnnounceBackground(true);
+            FlushFusionClient();
+            return;
+        }
+
+        AnnounceBackground(false);
+        if (_opponentLeftWhileAway)
+        {
+            _opponentLeftWhileAway = false;
+            OnOpponentLeft?.Invoke();
+        }
+        if (!_needsRejoin) return;
+        _needsRejoin = false;
+        RejoinActiveSession();
+    }
+
+    /// <summary>
+    /// Pushes the live clock, score, and hearts to the opponent.
+    /// Throttled; score and hearts still replicate on their own networked fields.
+    /// </summary>
+    public void PublishLiveStats(float elapsed, int score, int halfHearts)
+    {
+        if (Runner == null || !Runner.IsRunning || elapsed < 0f) return;
+
+        int centi = Mathf.FloorToInt(elapsed * 100f);
+        bool sameSecond = _lastClockCenti >= 0 && centi / 100 == _lastClockCenti / 100;
+        if (sameSecond && Time.unscaledTime < _nextClockSend) return;
+
+        _lastClockCenti = centi;
+        _nextClockSend = Time.unscaledTime + 0.2f;
+        string payload = centi + "\n" + score + "\n" + halfHearts;
+        SendToOthers(ClockKey, Encoding.UTF8.GetBytes(payload));
+    }
+
+    private void AnnounceBackground(bool away)
+    {
+        if (Runner == null || !Runner.IsRunning) return;
+        SendToOthers(AwayKey, Encoding.UTF8.GetBytes(away ? "1" : "0"));
+        NetworkSudokuPlayer.Local?.SetBackgrounded(away);
+    }
+
+    private void FlushFusionClient()
+    {
+        try
+        {
+            ResolveFusionClient(Runner)?.Service();
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Flush skipped: {ex.Message}");
+        }
     }
 
     public void SetLocalPlayerName(string name)
@@ -190,6 +354,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             waitingForOpponent = true;
             awaitHostStart = false;
             sceneLoadRequested = false;
+            _intentionalLeave = false;
+            _needsRejoin = false;
+            _sessionName = $"INT_{(int)difficulty}";
             ClearOpponentIdentity();
 
             var runner = await CreateNetworkRunner();
@@ -198,7 +365,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             {
                 GameMode = GameMode.Shared,
                 Address = NetAddress.Any(),
-                SessionName = $"INT_{(int)difficulty}",
+                SessionName = _sessionName,
                 Scene = GetStartGameSceneInfo(),
                 PlayerCount = 2,
                 CustomPhotonAppSettings = GetPhotonAppSettings(),
@@ -218,6 +385,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
             // Start timeout coroutine — fires OnMatchmakingTimeout after 60 s
             // if we still haven't seen a second player
+            KeepSessionAliveInBackground();
+            StartCoroutine(ConfigureRoomSoon());
             if (matchmakingTimeoutCoroutine != null) StopCoroutine(matchmakingTimeoutCoroutine);
             matchmakingTimeoutCoroutine = StartCoroutine(MatchmakingTimeoutRoutine());
         }
@@ -246,9 +415,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             waitingForOpponent = true;
             awaitHostStart = true;
             sceneLoadRequested = false;
+            _intentionalLeave = false;
+            _needsRejoin = false;
             ClearOpponentIdentity();
 
             string roomCode = GenerateRoomCode();
+            _sessionName = "COMP_" + roomCode;
             MatchLevel = (Math.Abs(roomCode.Trim().ToUpper().GetHashCode()) % 500) + 1;
 
             var runner = await CreateNetworkRunner();
@@ -257,7 +429,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             {
                 GameMode = GameMode.Shared,
                 Address = NetAddress.Any(),
-                SessionName = "COMP_" + roomCode,
+                SessionName = _sessionName,
                 Scene = GetStartGameSceneInfo(),
                 PlayerCount = 2,
                 CustomPhotonAppSettings = GetPhotonAppSettings(),
@@ -275,6 +447,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 return null;
             }
 
+            KeepSessionAliveInBackground();
+            StartCoroutine(ConfigureRoomSoon());
             OnRoomCodeGenerated?.Invoke(roomCode);
             return roomCode;
         }
@@ -303,6 +477,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             waitingForOpponent = true;
             awaitHostStart = true;
             sceneLoadRequested = false;
+            _intentionalLeave = false;
+            _needsRejoin = false;
+            _sessionName = "COMP_" + roomCode.ToUpper().Trim();
             ClearOpponentIdentity();
 
             var runner = await CreateNetworkRunner();
@@ -311,7 +488,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             {
                 GameMode = GameMode.Shared,
                 Address = NetAddress.Any(),
-                SessionName = "COMP_" + roomCode.ToUpper().Trim(),
+                SessionName = _sessionName,
                 Scene = GetStartGameSceneInfo(),
                 PlayerCount = 2,
                 CustomPhotonAppSettings = GetPhotonAppSettings(),
@@ -329,6 +506,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 return;
             }
 
+            KeepSessionAliveInBackground();
+            StartCoroutine(ConfigureRoomSoon());
             OnConnectedToRoom?.Invoke();
         }
         finally
@@ -340,6 +519,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     /// <summary>Disconnect from Photon and clean up.</summary>
     public async void Disconnect()
     {
+        _intentionalLeave = true;
+        _needsRejoin = false;
+        _backgrounded = false;
         IsMultiplayerGame = false;
         waitingForOpponent = false;
         awaitHostStart = false;
@@ -354,6 +536,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             matchmakingTimeoutCoroutine = null;
         }
         if (Runner != null) await ShutdownRunner();
+        ReleaseMatchWakeLock();
     }
 
     // ====================================================================
@@ -482,7 +665,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
             BroadcastIdentity();
             OnOpponentJoined?.Invoke();
+            if (identityResendCoroutine != null)
+                StopCoroutine(identityResendCoroutine);
+            identityResendCoroutine = StartCoroutine(ResendIdentity());
         }
+    }
+
+    private IEnumerator ResendIdentity()
+    {
+        yield return new WaitForSecondsRealtime(0.4f);
+        BroadcastIdentity();
+        yield return new WaitForSecondsRealtime(1f);
+        BroadcastIdentity();
+        identityResendCoroutine = null;
     }
 
     private void BroadcastIdentity()
@@ -516,6 +711,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentName = null;
         OpponentAvatarIndex = -1;
         OpponentProfileLevel = 1;
+        OpponentElapsedSeconds = 0f;
+        OpponentLiveScore = 0;
+        OpponentLiveHalfHearts = HeartManager.MaxHalfHearts;
+        OpponentBackgrounded = false;
+        _opponentClockReceivedAt = -1f;
+        _smoothFloor = 0f;
     }
 
     private void ClearRematchFlags()
@@ -570,10 +771,137 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         return ProfileManager.Instance.GetPresetAvatar(OpponentAvatarIndex);
     }
 
+    private IEnumerator ConfigureRoomSoon()
+    {
+        yield return new WaitForSecondsRealtime(0.5f);
+        ConfigureRoomPersistence();
+        KeepSessionAliveInBackground();
+    }
+
+    private void ConfigureRoomPersistence()
+    {
+        // Seat lifetime stays at Fusion's default so a real app exit removes
+        // the player. Screen-off keeps the socket alive instead of relying on TTL.
+        KeepSessionAliveInBackground();
+    }
+
+    private async void RejoinActiveSession()
+    {
+        if (_intentionalLeave || _isQuitting || string.IsNullOrEmpty(_sessionName)) return;
+        if (isStartingGame || IsInSession) return;
+        if (_rejoinAttempts >= 3) return;
+
+        _rejoinAttempts++;
+        isStartingGame = true;
+        bool retry = false;
+        try
+        {
+            var runner = await CreateNetworkRunner();
+            var startArgs = new StartGameArgs
+            {
+                GameMode = GameMode.Shared,
+                Address = NetAddress.Any(),
+                SessionName = _sessionName,
+                Scene = GetStartGameSceneInfo(),
+                PlayerCount = 2,
+                CustomPhotonAppSettings = GetPhotonAppSettings(),
+                SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
+                ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
+            };
+
+            var result = await runner.StartGame(startArgs);
+            if (!result.Ok)
+            {
+                Debug.LogWarning($"[MultiplayerManager] Rejoin failed: {result.ShutdownReason}");
+                await ShutdownRunner();
+                retry = !_intentionalLeave && !_isQuitting;
+            }
+            else
+            {
+                _rejoinAttempts = 0;
+                KeepSessionAliveInBackground();
+                ConfigureRoomPersistence();
+                AnnounceBackground(false);
+            }
+        }
+        finally
+        {
+            isStartingGame = false;
+        }
+
+        if (retry)
+            RejoinActiveSession();
+    }
+
+    private static Photon.Realtime.RealtimeClient ResolveFusionClient(NetworkRunner runner)
+    {
+        if (runner == null) return null;
+
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.NonPublic;
+        object services = typeof(NetworkRunner).GetField("_cloudServices", flags)?.GetValue(runner);
+        if (services == null) return null;
+
+        object communicator = services.GetType().GetField("_communicator", flags)?.GetValue(services);
+        if (communicator == null) return null;
+
+        return communicator.GetType().GetProperty("Client")?.GetValue(communicator) as Photon.Realtime.RealtimeClient;
+    }
+
+    private void AcquireMatchWakeLock()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (_matchWakeLock != null) return;
+        try
+        {
+            using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
+            using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
+            using (var context = activity.Call<AndroidJavaObject>("getApplicationContext"))
+            using (var power = context.Call<AndroidJavaObject>("getSystemService", "power"))
+            {
+                // PARTIAL_WAKE_LOCK: CPU stays awake after the screen turns off.
+                _matchWakeLock = power.Call<AndroidJavaObject>("newWakeLock", 1, "Sudoku:Match");
+                _matchWakeLock.Call("setReferenceCounted", false);
+                _matchWakeLock.Call("acquire");
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Wake lock skipped: {ex.Message}");
+        }
+#endif
+    }
+
+    private void ReleaseMatchWakeLock()
+    {
+#if UNITY_ANDROID && !UNITY_EDITOR
+        if (_matchWakeLock == null) return;
+        try
+        {
+            if (_matchWakeLock.Call<bool>("isHeld"))
+                _matchWakeLock.Call("release");
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Wake lock release: {ex.Message}");
+        }
+        finally
+        {
+            _matchWakeLock.Dispose();
+            _matchWakeLock = null;
+        }
+#endif
+    }
+
     void INetworkRunnerCallbacks.OnPlayerLeft(NetworkRunner runner, PlayerRef player)
     {
-        if (player != runner.LocalPlayer)
-            OnOpponentLeft?.Invoke();
+        if (_intentionalLeave) return;
+        if (player == runner.LocalPlayer) return;
+        if (_backgrounded)
+        {
+            _opponentLeftWhileAway = true;
+            return;
+        }
+        OnOpponentLeft?.Invoke();
     }
 
     void INetworkRunnerCallbacks.OnConnectedToServer(NetworkRunner runner) { }
@@ -628,9 +956,32 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             RematchRequestedRemote = true;
             OnRematchStateChanged?.Invoke();
         }
+        else if (keyId == 3)
+        {
+            OpponentBackgrounded = payload.Trim() == "1";
+        }
+        else if (keyId == 4)
+        {
+            string[] parts = payload.Split('\n');
+            if (parts.Length > 0 && int.TryParse(parts[0], out int centi))
+            {
+                OpponentElapsedSeconds = Mathf.Max(0f, centi / 100f);
+                _opponentClockReceivedAt = Time.unscaledTime;
+            }
+            if (parts.Length > 1 && int.TryParse(parts[1], out int score))
+                OpponentLiveScore = Mathf.Max(0, score);
+            if (parts.Length > 2 && int.TryParse(parts[2], out int hearts))
+                OpponentLiveHalfHearts = Mathf.Clamp(hearts, 0, HeartManager.MaxHalfHearts);
+        }
     }
     void INetworkRunnerCallbacks.OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress) { }
     void INetworkRunnerCallbacks.OnInput(NetworkRunner runner, NetworkInput input) { }
     void INetworkRunnerCallbacks.OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
-    void INetworkRunnerCallbacks.OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason) { }
+    void INetworkRunnerCallbacks.OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
+    {
+        bool ours = Runner == runner;
+        if (ours) Runner = null;
+        if (!ours || _intentionalLeave || _isQuitting || !_backgrounded || !IsMultiplayerGame) return;
+        _needsRejoin = true;
+    }
 }

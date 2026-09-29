@@ -185,7 +185,9 @@ public class MultiplayerLobbyUI : MonoBehaviour
 
     public void PresentOpponentFound()
     {
+        bool already = opponentFound;
         opponentFound = true;
+        SetGroupActive(searchingGroup, true);
         ApplyFoundPlayers();
 
         bool showStart = searchContext == SearchContext.Competition || searchContext == SearchContext.Rematch;
@@ -194,8 +196,30 @@ public class MultiplayerLobbyUI : MonoBehaviour
         else
             SetStartGameVisible(false);
 
-        if (searchContext == SearchContext.International)
+        if (!already && searchContext == SearchContext.International)
             BeginAutoStart();
+    }
+
+    private void Update()
+    {
+        if (opponentFound || searchContext == SearchContext.None) return;
+        if (searchingGroup == null || !searchingGroup.activeInHierarchy) return;
+
+        var runner = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.Runner : null;
+        if (runner == null || !runner.IsRunning) return;
+
+        int count = 0;
+        foreach (var _ in runner.ActivePlayers) count++;
+        if (count >= 2)
+            PresentOpponentFound();
+    }
+
+    private void LateUpdate()
+    {
+        if (!opponentFound || searchingGroup == null || !searchingGroup.activeInHierarchy) return;
+        if (searchingStatusText == null) EnsureReferences();
+        if (searchingStatusText != null && searchingStatusText.text != "Opponent Found!")
+            searchingStatusText.text = "Opponent Found!";
     }
 
     private void OnInternationalClicked()
@@ -349,7 +373,7 @@ public class MultiplayerLobbyUI : MonoBehaviour
         searchVisuals?.ShowOpponent(opponentName, opponentAvatar, false);
 
         if (searchingStatusText != null)
-            searchingStatusText.text = opponentName;
+            searchingStatusText.text = "Opponent Found!";
     }
 
     private void ShowLocalPlayer()
@@ -413,14 +437,23 @@ public class MultiplayerLobbyUI : MonoBehaviour
     private void StartSpinner()
     {
         if (searchingSpinner == null) return;
+
         spinnerTween?.Kill();
-        searchingSpinner.gameObject.SetActive(false);
+        searchingSpinner.gameObject.SetActive(true);
+        searchingSpinner.localRotation = Quaternion.identity;
+        spinnerTween = searchingSpinner
+            .DORotate(new Vector3(0f, 0f, -360f), 1f, RotateMode.FastBeyond360)
+            .SetEase(Ease.Linear)
+            .SetLoops(-1, LoopType.Restart)
+            .SetLink(searchingSpinner.gameObject);
     }
 
     private void StopSpinner()
     {
         spinnerTween?.Kill();
         spinnerTween = null;
+        if (searchingSpinner != null)
+            searchingSpinner.gameObject.SetActive(false);
     }
 
     private void EnsureReferences()
@@ -509,20 +542,17 @@ public class PlayerSearchVisuals
         var visuals = new PlayerSearchVisuals();
         if (root == null) return visuals;
 
-        Transform avatar = FindNamed(root, "AvatarImage");
-        if (avatar == null)
+        Transform opponentRoot = FindNamed(root, "Opponent");
+        Transform avatar = null;
+        if (opponentRoot != null)
         {
-            Transform opponent = FindNamed(root, "Opponent");
-            if (opponent != null)
-            {
-                Transform image = FindNamed(opponent, "Image");
-                if (image != null)
-                {
-                    image.name = "AvatarImage";
-                    avatar = image;
-                }
-            }
+            avatar = FindNamed(opponentRoot, "AvatarImage");
+            if (avatar == null)
+                avatar = FindNamed(opponentRoot, "Image");
         }
+
+        if (avatar == null)
+            avatar = FindNamed(root, "AvatarImage");
 
         if (avatar == null)
             avatar = CreateOpponentSlot(root);
@@ -533,35 +563,21 @@ public class PlayerSearchVisuals
             if (visuals.AvatarImage == null)
                 visuals.AvatarImage = avatar.GetComponentInChildren<Image>(true);
 
-            Transform ring = avatar.Find("CircleLoading");
-            if (ring == null)
-                ring = CreateCircleLoading(visuals.AvatarImage != null ? visuals.AvatarImage.transform : avatar);
-
+            Transform ring = FindNamed(avatar, "CircleLoading");
             if (ring != null)
                 visuals.CircleLoading = ring.GetComponent<Image>();
         }
 
-        Transform search = FindNamed(root, "SearchText");
+        Transform search = FindNamed(root, "OpponentName_Text");
         if (search == null)
-        {
-            Transform opponent = FindNamed(root, "Opponent");
-            if (opponent != null)
-            {
-                TMP_Text[] texts = opponent.GetComponentsInChildren<TMP_Text>(true);
-                for (int i = 0; i < texts.Length; i++)
-                {
-                    if (texts[i].gameObject.name.Contains("Who")) continue;
-                    search = texts[i].transform;
-                    break;
-                }
-            }
-        }
+            search = FindNamed(root, "SearchText");
+        if (search == null && opponentRoot != null)
+            search = FindSideName(opponentRoot)?.transform;
 
         if (search != null)
-            visuals.SearchText = search.GetComponent<TMP_Text>();
+            visuals.SearchText = search.GetComponent<TMP_Text>() ?? search.GetComponentInChildren<TMP_Text>(true);
 
         Transform spinner = null;
-        Transform opponentRoot = FindNamed(root, "Opponent");
         if (opponentRoot != null) spinner = FindNamed(opponentRoot, "CircleSpinner");
         if (spinner == null) spinner = FindNamed(root, "CircleSpinner");
         if (spinner != null) visuals.CircleSpinner = spinner as RectTransform;
@@ -569,15 +585,16 @@ public class PlayerSearchVisuals
         Transform player = FindNamed(root, "Player");
         if (player != null)
         {
-            Transform playerImage = FindNamed(player, "Image");
+            Transform playerImage = FindNamed(player, "AvatarImage");
+            if (playerImage == null)
+                playerImage = FindNamed(player, "Image");
             if (playerImage != null) visuals.LocalAvatar = playerImage.GetComponent<Image>();
-            TMP_Text[] texts = player.GetComponentsInChildren<TMP_Text>(true);
-            for (int i = 0; i < texts.Length; i++)
-            {
-                if (texts[i].gameObject.name.Contains("Who")) continue;
-                visuals.LocalNameText = texts[i];
-                break;
-            }
+
+            Transform playerName = FindNamed(root, "PlayerName_Text");
+            if (playerName != null)
+                visuals.LocalNameText = playerName.GetComponent<TMP_Text>() ?? playerName.GetComponentInChildren<TMP_Text>(true);
+            if (visuals.LocalNameText == null)
+                visuals.LocalNameText = FindSideName(player);
         }
 
         visuals.ConfigureRing();
@@ -589,7 +606,11 @@ public class PlayerSearchVisuals
         if (LocalNameText != null && !string.IsNullOrEmpty(playerName))
             LocalNameText.text = playerName;
         if (LocalAvatar != null && avatar != null)
+        {
             LocalAvatar.sprite = avatar;
+            LocalAvatar.enabled = true;
+            LocalAvatar.gameObject.SetActive(true);
+        }
     }
 
     public void BeginSearching()
@@ -620,7 +641,49 @@ public class PlayerSearchVisuals
             SearchText.text = string.IsNullOrEmpty(opponentName) ? "Opponent" : opponentName;
 
         if (AvatarImage != null && avatar != null)
+        {
             AvatarImage.sprite = avatar;
+            AvatarImage.enabled = true;
+            AvatarImage.gameObject.SetActive(true);
+            AvatarImage.color = Color.white;
+        }
+    }
+
+    // Name label on a player card. Prefer the text that sits with the avatar
+    // (PlayerName_Text / OpponentName_Text). Skip the static "You" / "Opponent"
+    // caption parented under WhoText when a dedicated name label exists.
+    private static TMP_Text FindSideName(Transform side)
+    {
+        if (side == null) return null;
+
+        TMP_Text[] texts = side.GetComponentsInChildren<TMP_Text>(true);
+        TMP_Text outsideWho = null;
+        TMP_Text any = null;
+        for (int i = 0; i < texts.Length; i++)
+        {
+            if (texts[i] == null) continue;
+            if (texts[i].gameObject.name.IndexOf("Who", System.StringComparison.OrdinalIgnoreCase) >= 0)
+                continue;
+
+            if (any == null)
+                any = texts[i];
+
+            if (outsideWho == null && !IsUnderNamed(texts[i].transform, side, "WhoText"))
+                outsideWho = texts[i];
+        }
+
+        return outsideWho != null ? outsideWho : any;
+    }
+
+    private static bool IsUnderNamed(Transform node, Transform stop, string ancestorName)
+    {
+        Transform current = node;
+        while (current != null && current != stop)
+        {
+            if (current.name == ancestorName) return true;
+            current = current.parent;
+        }
+        return false;
     }
 
     public void Stop()
@@ -659,25 +722,6 @@ public class PlayerSearchVisuals
     {
         spinTween?.Kill();
         spinTween = null;
-    }
-
-    private static Transform CreateCircleLoading(Transform parent)
-    {
-        if (parent == null) return null;
-
-        var go = new GameObject("CircleLoading", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-        go.transform.SetParent(parent, false);
-
-        var rt = go.GetComponent<RectTransform>();
-        rt.anchorMin = Vector2.zero;
-        rt.anchorMax = Vector2.one;
-        rt.offsetMin = new Vector2(-8f, -8f);
-        rt.offsetMax = new Vector2(8f, 8f);
-
-        var image = go.GetComponent<Image>();
-        image.color = new Color(0.85f, 0.85f, 0.88f, 0.95f);
-        image.sprite = Sprite.Create(Texture2D.whiteTexture, new Rect(0f, 0f, 4f, 4f), new Vector2(0.5f, 0.5f));
-        return go.transform;
     }
 
     private static Transform CreateOpponentSlot(Transform root)

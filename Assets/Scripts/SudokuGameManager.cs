@@ -152,12 +152,6 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private int scorePerBoxComplete = 20;
     [SerializeField] private int scorePerBoardComplete = 200;
 
-    // ---- NEW: Profile XP Rewards ----
-    [Header("Profile XP Rewards (granted once, on board complete)")]
-    [SerializeField] private int profileXPEasy = 20;
-    [SerializeField] private int profileXPMedium = 40;
-    [SerializeField] private int profileXPHard = 80;
-
     private Coroutine randomSfxCoroutine;
 
     // ---- Multiplayer hooks (fired by the existing game logic) ----
@@ -191,6 +185,9 @@ public class SudokuGameManager : MonoBehaviour
 
     // ---- NEW: Score & Timer, tracked per level attempt ----
     private int sessionScore;
+    // How much of sessionScore has already been turned into profile XP.
+    // A new puzzle resets the score without taking XP back.
+    private int profileScoreApplied;
     private float levelStartTime;
     private float levelElapsedSeconds;
 
@@ -683,6 +680,7 @@ public class SudokuGameManager : MonoBehaviour
         if (hintButton != null) hintButton.interactable = true;
 
         sessionScore = 0;
+        profileScoreApplied = 0;
         levelStartTime = Time.time;
         levelElapsedSeconds = 0f;
 
@@ -693,8 +691,7 @@ public class SudokuGameManager : MonoBehaviour
             UpdateHintBadge();
         }
 
-        if (hudScoreText != null) hudScoreText.text = sessionScore.ToString();
-        OnScoreChanged?.Invoke(sessionScore);
+        UpdateScoreHud();
         if (hudTimeText != null) hudTimeText.text = FormatElapsedTime(0f);
 
         (puzzleGrid, solutionGrid) = SudokuGenerator.GeneratePuzzle(difficulty, currentLevel);
@@ -1206,10 +1203,9 @@ public class SudokuGameManager : MonoBehaviour
         isGameActive = false;
         levelElapsedSeconds = Time.time - levelStartTime;
 
-        // ---- NEW: Board-complete score, Profile XP, Level unlock ----
+        // Board-complete points raise the profile level through UpdateScoreHud.
         sessionScore += scorePerBoardComplete;
         UpdateScoreHud();
-        ProfileManager.Instance?.AddXP(GetProfileXPForDifficulty(currentDifficulty));
         Debug.Log($"[SudokuGameManager] Victory on {currentDifficulty} Level {currentLevel}. Highest completed before unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
         LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
         Debug.Log($"[SudokuGameManager] Highest completed after unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
@@ -1223,17 +1219,6 @@ public class SudokuGameManager : MonoBehaviour
         bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
         if (!isMultiplayer)
             ShowOutputPanel(isVictory: true);
-    }
-
-    private int GetProfileXPForDifficulty(UIManager.Difficulty difficulty)
-    {
-        switch (difficulty)
-        {
-            case UIManager.Difficulty.Easy: return profileXPEasy;
-            case UIManager.Difficulty.Medium: return profileXPMedium;
-            case UIManager.Difficulty.Hard: return profileXPHard;
-            default: return profileXPEasy;
-        }
     }
 
     private void HandleGameOver()
@@ -1488,11 +1473,16 @@ public class SudokuGameManager : MonoBehaviour
             : $"{minutes:00}:{secs:00}";
     }
 
-    // Call any time sessionScore changes, to keep the live HUD in sync.
+    // Call any time sessionScore changes, to keep the live HUD and profile level in sync.
     private void UpdateScoreHud()
     {
         if (hudScoreText != null) hudScoreText.text = sessionScore.ToString();
         OnScoreChanged?.Invoke(sessionScore);
+
+        int gained = sessionScore - profileScoreApplied;
+        profileScoreApplied = sessionScore;
+        if (gained > 0)
+            ProfileManager.Instance?.AddXP(gained);
     }
 
     private enum ConfirmationAction
@@ -1708,6 +1698,39 @@ public class SudokuGameManager : MonoBehaviour
     /// Used by NetworkSudokuPlayer to initialise the board snapshot.
     /// </summary>
     public int[,] GetCurrentPuzzle() => puzzleGrid;
+
+    /// <summary>
+    /// Writes the on-screen board, including numbers the player already placed,
+    /// into the network snapshot. Used when the local player object is spawned
+    /// again after the phone wakes up.
+    /// </summary>
+    public bool CopyLiveBoard(NetworkSudokuPlayer player)
+    {
+        if (player == null || gridLayout == null || gridLayout.Cells == null) return false;
+
+        var cells = gridLayout.Cells;
+        for (int r = 0; r < 9; r++)
+        {
+            for (int c = 0; c < 9; c++)
+            {
+                SudokuCell cell = cells[r, c];
+                if (cell == null) return false;
+
+                int number = 0;
+                try
+                {
+                    number = cell.GetNumber();
+                }
+                catch (FormatException)
+                {
+                    number = 0;
+                }
+
+                player.RecordCellChange(r, c, (byte)number, cell.IsCorrect || number == 0);
+            }
+        }
+        return true;
+    }
 
     /// <summary>
     /// Snapshot of the live board as a flat 81-byte array (row*9+col).

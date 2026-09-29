@@ -184,9 +184,12 @@ public class MultiplayerResultPanel : MonoBehaviour
         var remote = NetworkSudokuPlayer.Remote;
         int localScore = SudokuGameManager.Instance != null ? SudokuGameManager.Instance.SessionScore : (local != null ? local.Score : 0);
         int localLives = local != null ? local.HalfHearts / 2 : (SudokuGameManager.Instance != null ? SudokuGameManager.Instance.CurrentHalfHearts / 2 : 0);
-        int remoteScore = remote != null ? remote.Score : 0;
-        float remoteTime = remote != null ? remote.ElapsedTime : 0f;
-        int remoteLives = remote != null ? remote.HalfHearts / 2 : 0;
+        int remoteScore = remote != null ? remote.Score : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentLiveScore : 0);
+        float remoteTime = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentElapsedSmooth : 0f;
+        if (remote != null)
+            remoteTime = Mathf.Max(remoteTime, remote.VisibleElapsed);
+        int remoteHearts = remote != null ? remote.HalfHearts : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentLiveHalfHearts : 0);
+        int remoteLives = Mathf.Max(0, remoteHearts) / 2;
 
         SetStat(panelRoot.transform, "PlayerStats", localScore, localTime, localLives);
         SetStat(panelRoot.transform, "OpponentStats", remoteScore, remoteTime, remoteLives);
