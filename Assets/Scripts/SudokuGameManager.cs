@@ -303,6 +303,10 @@ public class SudokuGameManager : MonoBehaviour
     private IEnumerator BootWithLoadingScreen()
     {
         ResolveLoadingAndRevive();
+        if (MultiplayerManager.Instance != null
+            && MultiplayerManager.Instance.IsMultiplayerGame
+            && MultiplayerManager.Instance.IsInSession)
+            MultiplayerManager.Instance.ResetMatchProgress();
 
         if (loadingPanel != null)
         {
@@ -318,22 +322,11 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         float duration = Mathf.Max(0.4f, loadingDuration);
-        float elapsed = 0f;
-        while (elapsed < duration)
-        {
-            elapsed += Time.deltaTime;
-            if (loadingFill != null)
-                loadingFill.fillAmount = Mathf.SmoothStep(0f, 1f, Mathf.Clamp01(elapsed / duration));
-            yield return null;
-        }
-
-        if (loadingFill != null) loadingFill.fillAmount = 1f;
+        yield return null;
 
         bool waitForOpponent = MultiplayerManager.Instance != null
             && MultiplayerManager.Instance.IsMultiplayerGame
             && MultiplayerManager.Instance.IsInSession;
-        if (!waitForOpponent && loadingPanel != null)
-            loadingPanel.SetActive(false);
 
         int level;
         if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
@@ -348,29 +341,54 @@ public class SudokuGameManager : MonoBehaviour
                 : 1;
         }
 
-        StartNewGame(currentDifficulty, level);
-        if (waitForOpponent)
-            yield return WaitForBothPlayersThenHideLoading();
-    }
-
-    private IEnumerator WaitForBothPlayersThenHideLoading()
-    {
-        float waited = 0f;
-        while (waited < 45f)
+        if (!waitForOpponent)
         {
-            var match = MultiplayerManager.Instance;
-            if (match == null || !match.IsInSession || match.MatchClockArmed)
-                break;
+            float elapsed = 0f;
+            while (elapsed < duration)
+            {
+                elapsed += Time.unscaledDeltaTime;
+                if (loadingFill != null)
+                    loadingFill.fillAmount = Mathf.Clamp01(elapsed / duration);
+                yield return null;
+            }
+
+            if (loadingFill != null) loadingFill.fillAmount = 1f;
+            StartNewGame(currentDifficulty, level);
+            if (loadingPanel != null)
+                loadingPanel.SetActive(false);
+            yield break;
+        }
+
+        StartNewGame(currentDifficulty, level);
+        float waited = 0f;
+        const float startTimeout = 45f;
+        while (true)
+        {
             waited += Time.unscaledDeltaTime;
+            var match = MultiplayerManager.Instance;
+            bool clockReady = match == null || !match.IsInSession || match.MatchClockArmed || waited >= startTimeout;
+            if (loadingFill != null)
+                loadingFill.fillAmount = clockReady ? 1f : CreepingLoadFill(waited, duration);
+            if (clockReady)
+                break;
             yield return null;
         }
 
         var mp = MultiplayerManager.Instance;
         if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
             mp.ArmMatchClockNow();
-
+        if (loadingFill != null) loadingFill.fillAmount = 1f;
         if (loadingPanel != null)
             loadingPanel.SetActive(false);
+    }
+
+    private static float CreepingLoadFill(float elapsed, float pace)
+    {
+        float span = Mathf.Max(0.4f, pace);
+        if (elapsed <= span)
+            return (elapsed / span) * 0.9f;
+        float extra = elapsed - span;
+        return 0.9f + 0.09f * (extra / (extra + 1.5f));
     }
 
     private void BindGameplayHud()

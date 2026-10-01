@@ -82,6 +82,8 @@ public class ProfileManager : MonoBehaviour
     [Tooltip("Image Type must be Filled, horizontal.")]
     [SerializeField] private Image profileXPFillImage;
     [SerializeField] private TMP_Text profileXPLabel;
+    private TMP_Text menuLevelLabel;
+    private Image menuLevelFill;
 
     private const string ProfileLevelKey = "ProfileLevel";
     private const string ProfileXPKey = "ProfileXP";
@@ -260,6 +262,8 @@ public class ProfileManager : MonoBehaviour
         profileLevelLabel = fresh.profileLevelLabel;
         profileXPFillImage = fresh.profileXPFillImage;
         profileXPLabel = fresh.profileXPLabel;
+        menuLevelLabel = null;
+        menuLevelFill = null;
 
         if (currentAvatarSprite != null) ApplySprite(currentAvatarSprite);
         ApplyPlayerNameToLabels();
@@ -877,14 +881,51 @@ public class ProfileManager : MonoBehaviour
     private void RefreshLevelDisplay()
     {
         EnsureLevelProgressUi();
+        BindMenuLevelBar();
 
         int required = GetXPRequiredForLevel(ProfileLevel);
+        float fill = required > 0 ? Mathf.Clamp01((float)CurrentXP / required) : 0f;
+
         if (profileLevelLabel != null)
             profileLevelLabel.text = $"Level: {ProfileLevel:00}";
+        if (menuLevelLabel != null)
+            menuLevelLabel.text = $"Level {ProfileLevel:00}";
+
+        ApplyLevelFill(profileXPFillImage, fill);
+        ApplyLevelFill(menuLevelFill, fill);
+
         if (profileXPLabel != null)
-            profileXPLabel.text = $"{CurrentXP}/{required}";
-        if (profileXPFillImage != null)
-            profileXPFillImage.fillAmount = required > 0 ? Mathf.Clamp01((float)CurrentXP / required) : 0f;
+            profileXPLabel.gameObject.SetActive(false);
+    }
+
+    public void RefreshSharedLevelBar()
+    {
+        RefreshLevelDisplay();
+    }
+
+    private static void ApplyLevelFill(Image bar, float fill)
+    {
+        if (bar == null) return;
+        bar.type = Image.Type.Filled;
+        bar.fillMethod = Image.FillMethod.Horizontal;
+        bar.fillOrigin = (int)Image.OriginHorizontal.Left;
+        bar.fillAmount = fill;
+    }
+
+    private void BindMenuLevelBar()
+    {
+        if (profileIconButton == null) return;
+        Transform background = FindNamed(profileIconButton.transform, "LevelBackGround");
+        if (background == null) return;
+
+        menuLevelFill = background.GetComponent<Image>();
+        if (menuLevelLabel == null)
+        {
+            Transform text = FindNamed(background, "Text (TMP)");
+            if (text != null) menuLevelLabel = text.GetComponent<TMP_Text>();
+        }
+
+        HideNamed(background, "MenuLevelProgressFill");
     }
 
     private void EnsureLevelProgressUi()
@@ -897,31 +938,20 @@ public class ProfileManager : MonoBehaviour
             if (levelText != null) profileLevelLabel = levelText.GetComponent<TMP_Text>();
         }
 
-        if (profileXPFillImage == null)
-        {
-            Transform fill = FindNamed(profilePanel.transform, "LevelProgressFill");
-            if (fill != null) profileXPFillImage = fill.GetComponent<Image>();
-        }
+        Transform bar = FindNamed(profilePanel.transform, "LEVELBG");
+        if (bar != null)
+            profileXPFillImage = bar.GetComponent<Image>();
 
-        if (profileXPLabel == null)
-        {
-            Transform label = FindNamed(profilePanel.transform, "LevelProgressText");
-            if (label != null) profileXPLabel = label.GetComponent<TMP_Text>();
-        }
+        HideNamed(profilePanel.transform, "LevelProgressTrack");
+        HideNamed(profilePanel.transform, "LevelProgressText");
+        HideNamed(profilePanel.transform, "LevelProgressFill");
+    }
 
-        if (profileLevelLabel == null) return;
-        if (profileXPFillImage != null && profileXPLabel != null) return;
-
-        Transform levelRoot = profileLevelLabel.transform.parent != null
-            ? profileLevelLabel.transform.parent.parent
-            : null;
-        if (levelRoot == null) return;
-
-        if (profileXPFillImage == null)
-            profileXPFillImage = CreateProgressFill(levelRoot);
-
-        if (profileXPLabel == null)
-            profileXPLabel = CreateProgressLabel(levelRoot, profileLevelLabel);
+    private static void HideNamed(Transform root, string objectName)
+    {
+        Transform found = FindNamed(root, objectName);
+        if (found != null)
+            found.gameObject.SetActive(false);
     }
 
     private static Image CreateProgressFill(Transform levelRoot)

@@ -49,6 +49,7 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     [Networked] public NetworkBool IsBackgrounded { get; set; }
     [Networked] public int ProfileLevel { get; set; }
     [Networked] public int AvatarIndex { get; set; }
+    [Networked] public NetworkBool WantsRematch { get; set; }
 
     // Fallback coast if the reliable clock channel has not delivered a sample yet.
     private float _sampleElapsed = -1f;
@@ -149,6 +150,10 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             float live = ReadLocalElapsed();
             ElapsedTime = live >= 0f ? live : 0f;
             ElapsedWholeSeconds = Mathf.FloorToInt(ElapsedTime);
+            IsFinished = false;
+            HasForfeited = false;
+            FinishTime = 0f;
+            WantsRematch = false;
 
             if (ProfileManager.Instance != null)
             {
@@ -166,6 +171,56 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         {
             Remote = this;
         }
+    }
+
+    /// <summary>
+    /// Clear this player's finished match so the rematch starts from an empty board.
+    /// </summary>
+    public void ResetForNewMatch(int puzzleLevel)
+    {
+        if (Object == null || !Object.IsValid || !HasStateAuthority) return;
+        try
+        {
+            IsFinished = false;
+            HasForfeited = false;
+            FinishTime = 0f;
+            WantsRematch = false;
+            Score = 0;
+            HalfHearts = HeartManager.MaxHalfHearts;
+            ClockFrozen = false;
+            FrozenElapsed = 0f;
+            ElapsedTime = 0f;
+            ElapsedWholeSeconds = 0;
+            IsBackgrounded = false;
+            CompletedCells = 0;
+            for (int i = 0; i < 81; i++)
+                BoardSnapshot.Set(i, 0);
+
+            if (puzzleLevel > 0 && Runner != null && Runner.IsSharedModeMasterClient)
+                SharedPuzzleLevel = puzzleLevel;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[NetworkSudokuPlayer] Rematch reset skipped: {ex.Message}");
+        }
+    }
+
+    public void SetWantsRematch(bool wants)
+    {
+        if (Object == null || !Object.IsValid || !HasStateAuthority) return;
+        try { WantsRematch = wants; }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[NetworkSudokuPlayer] Rematch flag skipped: {ex.Message}");
+        }
+    }
+
+    public static bool RemoteWantsRematch()
+    {
+        var remote = Remote;
+        if (remote == null || remote.Object == null || !remote.Object.IsValid) return false;
+        try { return remote.WantsRematch; }
+        catch { return false; }
     }
 
     public override void Despawned(NetworkRunner runner, bool hasState)

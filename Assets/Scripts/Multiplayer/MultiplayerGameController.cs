@@ -69,6 +69,10 @@ public class MultiplayerGameController : MonoBehaviour
             return;
         }
 
+        var fresh = MultiplayerManager.Instance;
+        fresh?.ResetMatchProgress();
+        NetworkSudokuPlayer.Local?.ResetForNewMatch(fresh != null ? fresh.MatchLevel : 0);
+
         gameManager = SudokuGameManager.Instance;
         if (gameManager == null)
         {
@@ -157,7 +161,10 @@ public class MultiplayerGameController : MonoBehaviour
             EnsureLocalPlayer();
 
         var mp = MultiplayerManager.Instance;
-        if (mp != null && mp.OpponentOutOfLives)
+        if (mp == null || !mp.MatchClockArmed)
+            return;
+
+        if (mp.OpponentOutOfLives)
         {
             HandleOpponentOutOfLives(mp.RemoteDisplayTime);
             return;
@@ -258,7 +265,9 @@ public class MultiplayerGameController : MonoBehaviour
         var diff = mp != null ? mp.MatchDifficulty : UIManager.Difficulty.Easy;
 
         // Spawn NetworkSudokuPlayer for the local player if not already spawned
-        if (NetworkSudokuPlayer.Local == null && networkPlayerPrefab != null && runner != null && runner.IsRunning)
+        if (NetworkSudokuPlayer.Local != null)
+            NetworkSudokuPlayer.Local.ResetForNewMatch(matchLevel);
+        else if (networkPlayerPrefab != null && runner != null && runner.IsRunning)
         {
             try
             {

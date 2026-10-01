@@ -213,8 +213,11 @@ public class MultiplayerLobbyUI : MonoBehaviour
         SetGroupActive(searchingGroup, true);
         ApplyFoundPlayers();
 
-        bool hostMayStart = searchContext == SearchContext.Rematch;
+        bool hostMayStart = false;
         SetStartGameVisible(hostMayStart && IsLocalHost());
+
+        if (searchContext == SearchContext.Rematch && searchingStatusText != null)
+            searchingStatusText.text = "Starting rematch...";
 
         if (!already && searchContext == SearchContext.International)
             BeginAutoStart();

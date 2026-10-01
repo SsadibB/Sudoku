@@ -90,6 +90,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public bool IsMultiplayerGame { get; private set; }
     public UIManager.Difficulty MatchDifficulty { get; private set; }
     public int MatchLevel { get; private set; } = 1;
+    public string MatchSessionId { get; private set; }
+    private bool _rematchStartSent;
     public bool IsHost { get; private set; }
 
     public void SetMatchLevel(int level)
@@ -106,7 +108,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public string RematchOpponentName { get; private set; }
     public int RematchOpponentAvatar { get; private set; } = -1;
     public bool WantsRematchLobby => RematchRequestedLocal && IsInSession;
-    public bool BothWantRematch => RematchRequestedLocal && RematchRequestedRemote;
+    public bool BothWantRematch => RematchRequestedLocal && OpponentAcceptedRematch;
+
+    public bool OpponentAcceptedRematch =>
+        RematchRequestedRemote || NetworkSudokuPlayer.RemoteWantsRematch();
 
     public bool IsCompetitionMatch =>
         !string.IsNullOrEmpty(_sessionName) && _sessionName.StartsWith("COMP_", StringComparison.Ordinal);
@@ -527,8 +532,13 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         if (RematchRequestedLocal && Time.unscaledTime >= _nextRematchSend)
         {
             _nextRematchSend = Time.unscaledTime + 0.5f;
+            NetworkSudokuPlayer.Local?.SetWantsRematch(true);
             BroadcastRematch();
         }
+        if (RematchRequestedLocal)
+            NoteRemoteRematch();
+        if (BothWantRematch)
+            TryBeginRematch();
         if (_localGameplayReady && !_matchClockArmed && Time.unscaledTime >= _nextReadySend)
         {
             _nextReadySend = Time.unscaledTime + 1f;
@@ -1108,6 +1118,36 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         _lastClockCenti = -1;
     }
 
+    /// <summary>
+    /// Drop the finished match's clock, score, and lives. Names stay so the rematch
+    /// is still the same two players.
+    /// </summary>
+    public void ResetMatchProgress()
+    {
+        OpponentElapsedSeconds = 0f;
+        OpponentLiveScore = 0;
+        OpponentLiveHalfHearts = HeartManager.MaxHalfHearts;
+        OpponentBackgrounded = false;
+        OpponentOutOfLives = false;
+        _forceLocalLivesZero = false;
+        _forceRemoteLivesZero = false;
+        _forceRemoteScore = -1;
+        _sharedStartSet = false;
+        _localFrozenElapsed = -1f;
+        _remoteFrozenElapsed = -1f;
+        _localGameplayReady = false;
+        _remoteGameplayReady = false;
+        _matchClockArmed = false;
+        ResultCaptured = false;
+        SnapshotLocalScore = 0;
+        SnapshotRemoteScore = 0;
+        SnapshotLocalLives = 0;
+        SnapshotRemoteLives = 0;
+        _lastClockCenti = -1;
+        RematchRequestedLocal = false;
+        RematchRequestedRemote = false;
+    }
+
     private void ClearRematchFlags()
     {
         RematchRequestedLocal = false;
@@ -1141,27 +1181,80 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         RememberRematchTarget();
         RematchRequestedLocal = true;
         awaitHostStart = true;
+        _rematchStartSent = false;
         sceneLoadRequested = false;
         rematchLobbyRequested = false;
         _nextRematchSend = Time.unscaledTime + 0.5f;
+        NetworkSudokuPlayer.Local?.SetWantsRematch(true);
         BroadcastRematch();
         BroadcastIdentity();
         FlushFusionClient();
         OnRematchStateChanged?.Invoke();
-
-        // Leave the result screen on this phone only. The other player stays
-        // where they are until they accept the rematch.
-        if (SceneManager.GetActiveScene().name != "MainMenu")
-            StartCoroutine(OpenRematchMenuSoon());
+        NoteRemoteRematch();
+        TryBeginRematch();
     }
 
-    private IEnumerator OpenRematchMenuSoon()
+    private void NoteRemoteRematch()
     {
-        yield return null;
-        BroadcastRematch();
+        if (!NetworkSudokuPlayer.RemoteWantsRematch()) return;
+        if (!RematchRequestedRemote)
+        {
+            RematchRequestedRemote = true;
+            OnRematchStateChanged?.Invoke();
+        }
+    }
+
+    private void TryBeginRematch()
+    {
+        if (_rematchStartSent || sceneLoadRequested) return;
+        if (!BothWantRematch || Runner == null || !Runner.IsRunning) return;
+        if (!Runner.IsSharedModeMasterClient) return;
+        BeginRematchMatch();
+    }
+
+    private void BeginRematchMatch()
+    {
+        if (_rematchStartSent || sceneLoadRequested) return;
+        if (Runner == null || !Runner.IsRunning || !Runner.IsSharedModeMasterClient) return;
+
+        _rematchStartSent = true;
+        sceneLoadRequested = true;
+        rematchLobbyRequested = false;
+        waitingForOpponent = false;
+
+        int nextLevel = UnityEngine.Random.Range(1, 500);
+        if (nextLevel == MatchLevel)
+            nextLevel = (MatchLevel % 499) + 1;
+        MatchLevel = nextLevel;
+        MatchSessionId = Guid.NewGuid().ToString("N");
+        ResetMatchProgress();
+        NetworkSudokuPlayer.Local?.ResetForNewMatch(MatchLevel);
+
+        string payload = "start\n" + MatchLevel + "\n" + MatchSessionId;
+        SendToOthers(RematchKey, Encoding.UTF8.GetBytes(payload));
         FlushFusionClient();
-        if (SceneManager.GetActiveScene().name != "MainMenu")
-            SceneManager.LoadScene("MainMenu");
+        ClearRematchFlags();
+
+        Runner.LoadScene(SceneRef.FromIndex(
+            SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/GameScene.unity")));
+    }
+
+    private void ApplyRematchStart(string payload)
+    {
+        string[] parts = payload.Split('\n');
+        string incomingId = parts.Length > 2 ? parts[2].Trim() : "";
+        if (!string.IsNullOrEmpty(incomingId) && incomingId == MatchSessionId && _matchClockArmed)
+            return;
+
+        if (parts.Length > 1 && int.TryParse(parts[1], out int level) && level > 0)
+            MatchLevel = level;
+        if (!string.IsNullOrEmpty(incomingId))
+            MatchSessionId = incomingId;
+
+        _rematchStartSent = true;
+        ResetMatchProgress();
+        NetworkSudokuPlayer.Local?.ResetForNewMatch(MatchLevel);
+        ClearRematchFlags();
     }
 
     private void RememberRematchTarget()
@@ -1405,9 +1498,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         else if (keyId == 2)
         {
-            if (RematchRequestedRemote) return;
-            RematchRequestedRemote = true;
-            OnRematchStateChanged?.Invoke();
+            string text = payload.Trim();
+            if (text.StartsWith("start", StringComparison.Ordinal))
+            {
+                ApplyRematchStart(text);
+                return;
+            }
+
+            if (!RematchRequestedRemote)
+            {
+                RematchRequestedRemote = true;
+                OnRematchStateChanged?.Invoke();
+            }
+            TryBeginRematch();
         }
         else if (keyId == 3)
         {

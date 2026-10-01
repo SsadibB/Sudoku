@@ -208,21 +208,41 @@ public class MultiplayerResultPanel : MonoBehaviour
 
     private void OnRematchStateChanged()
     {
-        // Each player opens the searching panel when they press Rematch.
-        // The other player is not pulled out of the result screen.
+        SetWaitingForRematch();
     }
 
     private void SetWaitingForRematch()
     {
+        var mp = MultiplayerManager.Instance;
+        string opponent = mp != null ? mp.RematchOpponentName : null;
+        if (string.IsNullOrWhiteSpace(opponent) && mp != null)
+            opponent = mp.OpponentName;
+
+        string status = mp != null && mp.BothWantRematch
+            ? "Starting rematch..."
+            : IsShownName(opponent)
+                ? $"Waiting for {opponent.Trim()} to rematch..."
+                : "Waiting for your opponent to rematch...";
+
         if (resultTitleText != null)
-            resultTitleText.text = "Waiting for opponent to rematch...";
+            resultTitleText.text = status;
 
         if (panelRoot == null) return;
         foreach (var text in panelRoot.GetComponentsInChildren<TMP_Text>(true))
         {
             if (text.gameObject.name == "Output_Text (TMP)")
-                text.text = "Waiting for your opponent to rematch.";
+                text.text = status;
         }
+    }
+
+    private static bool IsShownName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        name = name.Trim();
+        if (name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.StartsWith("Player_", System.StringComparison.Ordinal)) return false;
+        return true;
     }
 
     private void FillMatchStats(bool isWinner, float localTime)

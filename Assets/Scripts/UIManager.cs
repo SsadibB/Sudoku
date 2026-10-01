@@ -1156,10 +1156,8 @@ public class UIManager : MonoBehaviour
 
     private void HandleProfileXPChanged(int currentXP, int xpRequired, int level)
     {
-        if (profileLevelLabel != null) profileLevelLabel.text = $"Level. {level}";
-        if (profileXPLabel != null) profileXPLabel.text = $"{currentXP:N0}/{xpRequired:N0}";
-        if (profileXPFillImage != null)
-            profileXPFillImage.fillAmount = xpRequired > 0 ? Mathf.Clamp01((float)currentXP / xpRequired) : 0f;
+        if (ProfileManager.Instance != null)
+            ProfileManager.Instance.RefreshSharedLevelBar();
     }
 
     // ---------------- Difficulty Selection -> Game Scene ----------------
