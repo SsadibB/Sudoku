@@ -169,8 +169,17 @@ public class MultiplayerLobbyUI : MonoBehaviour
         SetGroupActive(modePanelGroup, false);
         SetGroupActive(intlDifficultyGroup, false);
         if (competitionRoomUI != null) competitionRoomUI.gameObject.SetActive(false);
-        OpenSearching("Waiting for your opponent to rematch...", autoStart: false);
+        OpenSearching(RematchWaitingStatus(), autoStart: false);
         RefreshRematchState();
+    }
+
+    public void ShowCompetitionHostWaiting(string roomCode)
+    {
+        // The host stays on HostWaitGroup. The searching panel is only for the joining player.
+        searchContext = SearchContext.None;
+        opponentFound = false;
+        if (searchingGroup != null) searchingGroup.SetActive(false);
+        SetStartGameVisible(false);
     }
 
     public void ShowCompetitionSearching()
@@ -183,18 +192,29 @@ public class MultiplayerLobbyUI : MonoBehaviour
         OpenSearching("Searching for the host...", autoStart: false);
     }
 
+    public void PresentCompetitionOpponent()
+    {
+        if (searchContext != SearchContext.Competition)
+            ShowCompetitionSearching();
+        PresentOpponentFound();
+    }
+
     public void PresentOpponentFound()
     {
+        if (searchContext == SearchContext.Rematch)
+        {
+            var mp = MultiplayerManager.Instance;
+            if (mp == null || !mp.IsExpectedRematchOpponent())
+                return;
+        }
+
         bool already = opponentFound;
         opponentFound = true;
         SetGroupActive(searchingGroup, true);
         ApplyFoundPlayers();
 
-        bool showStart = searchContext == SearchContext.Competition || searchContext == SearchContext.Rematch;
-        if (showStart)
-            SetStartGameVisible(IsLocalHost());
-        else
-            SetStartGameVisible(false);
+        bool hostMayStart = searchContext == SearchContext.Rematch;
+        SetStartGameVisible(hostMayStart && IsLocalHost());
 
         if (!already && searchContext == SearchContext.International)
             BeginAutoStart();
@@ -208,6 +228,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
         var runner = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.Runner : null;
         if (runner == null || !runner.IsRunning) return;
 
+        if (searchContext == SearchContext.Rematch)
+        {
+            var mp = MultiplayerManager.Instance;
+            if (!opponentFound && mp != null && mp.IsExpectedRematchOpponent())
+                PresentOpponentFound();
+            return;
+        }
+
         int count = 0;
         foreach (var _ in runner.ActivePlayers) count++;
         if (count >= 2)
@@ -216,7 +244,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
 
     private void LateUpdate()
     {
-        if (!opponentFound || searchingGroup == null || !searchingGroup.activeInHierarchy) return;
+        if (searchContext == SearchContext.Competition)
+        {
+            SetStartGameVisible(false);
+            return;
+        }
+
+        if (!opponentFound || searchContext != SearchContext.International) return;
+        if (searchingGroup == null || !searchingGroup.activeInHierarchy) return;
         if (searchingStatusText == null) EnsureReferences();
         if (searchingStatusText != null && searchingStatusText.text != "Opponent Found!")
             searchingStatusText.text = "Opponent Found!";
@@ -317,14 +352,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
         if (searchContext != SearchContext.Rematch) return;
 
         var mp = MultiplayerManager.Instance;
-        if (mp != null && mp.BothWantRematch)
+        if (mp != null && mp.IsExpectedRematchOpponent())
             PresentOpponentFound();
         else
         {
             opponentFound = false;
             searchVisuals?.BeginSearching();
             if (searchingStatusText != null)
-                searchingStatusText.text = "Waiting for your opponent to rematch...";
+                searchingStatusText.text = RematchWaitingStatus();
             SetStartGameVisible(false);
         }
     }
@@ -368,12 +403,21 @@ public class MultiplayerLobbyUI : MonoBehaviour
         ShowLocalPlayer();
 
         var mp = MultiplayerManager.Instance;
-        string opponentName = mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent";
+        string opponentName = mp != null ? mp.OpponentName : null;
+        if (!IsDisplayName(opponentName) && mp != null)
+            opponentName = mp.RematchOpponentName;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        searchVisuals?.ShowOpponent(opponentName, opponentAvatar, false);
+        if (opponentAvatar == null && mp != null && mp.RematchOpponentAvatar >= 0 && ProfileManager.Instance != null)
+            opponentAvatar = ProfileManager.Instance.GetPresetAvatar(mp.RematchOpponentAvatar);
+        searchVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
 
         if (searchingStatusText != null)
-            searchingStatusText.text = "Opponent Found!";
+        {
+            bool waitingForHost = searchContext == SearchContext.Competition && !IsLocalHost();
+            searchingStatusText.text = waitingForHost
+                ? "Waiting for host to start..."
+                : "Opponent Found!";
+        }
     }
 
     private void ShowLocalPlayer()
@@ -414,12 +458,38 @@ public class MultiplayerLobbyUI : MonoBehaviour
         startGameButton.interactable = visible;
     }
 
+    private string RematchWaitingStatus()
+    {
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && IsDisplayName(mp.RematchOpponentName))
+            return $"Waiting for {mp.RematchOpponentName} to rematch...";
+        return "Waiting for your opponent to rematch...";
+    }
+
+    private static bool IsDisplayName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        name = name.Trim();
+        if (name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.StartsWith("Player_", System.StringComparison.Ordinal)) return false;
+        return true;
+    }
+
     private bool IsLocalHost()
     {
         var mp = MultiplayerManager.Instance;
         if (mp == null) return false;
+        if (searchContext == SearchContext.Competition)
+            return mp.IsHost;
+        if (searchContext == SearchContext.Rematch)
+        {
+            if (mp.IsCompetitionMatch)
+                return mp.IsHost;
+            return mp.Runner != null && mp.Runner.IsSharedModeMasterClient;
+        }
         if (mp.IsHost) return true;
-        return mp.Runner != null && mp.Runner.IsSharedModeMasterClient && searchContext != SearchContext.Competition;
+        return mp.Runner != null && mp.Runner.IsSharedModeMasterClient;
     }
 
     private void SetGroupActive(GameObject g, bool active)
@@ -487,12 +557,17 @@ public class MultiplayerLobbyUI : MonoBehaviour
 
     private void EnsureStartButton()
     {
+        if (searchContext == SearchContext.Competition) return;
         if (startGameButton != null || searchingGroup == null) return;
 
         Transform existing = FindDeep(searchingGroup.transform, "StartGameButton");
+        if (existing == null)
+            existing = FindDeep(searchingGroup.transform, "StartButton");
         if (existing != null)
         {
             startGameButton = existing.GetComponent<Button>();
+            if (startGameButton != null)
+                startGameButton.gameObject.SetActive(false);
             return;
         }
 
@@ -568,7 +643,7 @@ public class PlayerSearchVisuals
                 visuals.CircleLoading = ring.GetComponent<Image>();
         }
 
-        Transform search = FindNamed(root, "OpponentName_Text");
+        Transform search = FindNamedPrefix(root, "OpponentName_Text");
         if (search == null)
             search = FindNamed(root, "SearchText");
         if (search == null && opponentRoot != null)
@@ -624,6 +699,9 @@ public class PlayerSearchVisuals
         if (CircleSpinner != null)
             CircleSpinner.gameObject.SetActive(true);
 
+        if (SearchText != null)
+            SearchText.text = "Searching...";
+
         StartSpin();
     }
 
@@ -637,8 +715,14 @@ public class PlayerSearchVisuals
         if (CircleSpinner != null)
             CircleSpinner.gameObject.SetActive(false);
 
-        if (writeNameLabel && SearchText != null)
-            SearchText.text = string.IsNullOrEmpty(opponentName) ? "Opponent" : opponentName;
+        if (SearchText != null && IsShownPlayerName(opponentName))
+        {
+            SearchText.text = opponentName.Trim();
+            SearchText.gameObject.SetActive(true);
+            HideGenericOpponentCaption(SearchText.transform);
+        }
+        else if (writeNameLabel && SearchText != null)
+            SearchText.text = "Searching...";
 
         if (AvatarImage != null && avatar != null)
         {
@@ -652,17 +736,36 @@ public class PlayerSearchVisuals
     // Name label on a player card. Prefer the text that sits with the avatar
     // (PlayerName_Text / OpponentName_Text). Skip the static "You" / "Opponent"
     // caption parented under WhoText when a dedicated name label exists.
+    private static bool IsShownPlayerName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        name = name.Trim();
+        if (name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.StartsWith("Player_", System.StringComparison.Ordinal)) return false;
+        return true;
+    }
+
     private static TMP_Text FindSideName(Transform side)
     {
         if (side == null) return null;
 
         TMP_Text[] texts = side.GetComponentsInChildren<TMP_Text>(true);
+        TMP_Text named = null;
         TMP_Text outsideWho = null;
         TMP_Text any = null;
         for (int i = 0; i < texts.Length; i++)
         {
             if (texts[i] == null) continue;
-            if (texts[i].gameObject.name.IndexOf("Who", System.StringComparison.OrdinalIgnoreCase) >= 0)
+            string objectName = texts[i].gameObject.name;
+            if (objectName.StartsWith("OpponentName", System.StringComparison.Ordinal)
+                || objectName.StartsWith("PlayerName", System.StringComparison.Ordinal))
+            {
+                named = texts[i];
+                break;
+            }
+
+            if (objectName.IndexOf("Who", System.StringComparison.OrdinalIgnoreCase) >= 0)
                 continue;
 
             if (any == null)
@@ -672,7 +775,41 @@ public class PlayerSearchVisuals
                 outsideWho = texts[i];
         }
 
-        return outsideWho != null ? outsideWho : any;
+        return named != null ? named : (outsideWho != null ? outsideWho : any);
+    }
+
+    private static void HideGenericOpponentCaption(Transform nameLabel)
+    {
+        Transform side = nameLabel;
+        for (int i = 0; i < 8 && side != null; i++)
+        {
+            if (side.name == "Opponent") break;
+            side = side.parent;
+        }
+        if (side == null || side.name != "Opponent") return;
+
+        TMP_Text[] texts = side.GetComponentsInChildren<TMP_Text>(true);
+        for (int i = 0; i < texts.Length; i++)
+        {
+            if (texts[i] == null || texts[i].transform == nameLabel) continue;
+            string value = texts[i].text != null ? texts[i].text.Trim() : "";
+            if (value.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase))
+                texts[i].gameObject.SetActive(false);
+        }
+    }
+
+    private static Transform FindNamedPrefix(Transform root, string name)
+    {
+        Transform exact = FindNamed(root, name);
+        if (exact != null) return exact;
+        if (root == null) return null;
+        if (root.name.StartsWith(name, System.StringComparison.Ordinal)) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindNamedPrefix(root.GetChild(i), name);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private static bool IsUnderNamed(Transform node, Transform stop, string ancestorName)

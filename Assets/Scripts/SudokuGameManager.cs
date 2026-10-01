@@ -201,6 +201,9 @@ public class SudokuGameManager : MonoBehaviour
     /// <summary>Line this phone's puzzle clock up with the shared match start.</summary>
     public void AlignMatchClock(float elapsed)
     {
+        if (MultiplayerManager.Instance == null || !MultiplayerManager.Instance.IsMultiplayerGame)
+            return;
+
         float safe = Mathf.Max(0f, elapsed);
         _matchStartUtc = DateTime.UtcNow.AddSeconds(-safe);
         _matchClockFloor = safe;
@@ -327,6 +330,7 @@ public class SudokuGameManager : MonoBehaviour
         if (loadingFill != null) loadingFill.fillAmount = 1f;
 
         bool waitForOpponent = MultiplayerManager.Instance != null
+            && MultiplayerManager.Instance.IsMultiplayerGame
             && MultiplayerManager.Instance.IsInSession;
         if (!waitForOpponent && loadingPanel != null)
             loadingPanel.SetActive(false);
@@ -390,9 +394,19 @@ public class SudokuGameManager : MonoBehaviour
 
         Transform timeLabel = single.Find("Time/ClockTime/Text (TMP)");
         if (timeLabel != null) hudTimeText = timeLabel.GetComponent<TMP_Text>();
+        if (hudTimeText == null)
+        {
+            Transform timeRoot = single.Find("Time");
+            if (timeRoot != null) hudTimeText = timeRoot.GetComponentInChildren<TMP_Text>(true);
+        }
 
         Transform scoreLabel = single.Find("Score/Score/Text (TMP)");
         if (scoreLabel != null) hudScoreText = scoreLabel.GetComponent<TMP_Text>();
+        if (hudScoreText == null)
+        {
+            Transform scoreRoot = single.Find("Score");
+            if (scoreRoot != null) hudScoreText = scoreRoot.GetComponentInChildren<TMP_Text>(true);
+        }
 
         if (heartManager != null)
         {
@@ -565,8 +579,14 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (!isGameActive) return;
 
+        bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
+        if (!multiplayer && (hudTimeText == null || hudScoreText == null))
+            BindGameplayHud();
+
         if (hudTimeText != null)
             hudTimeText.text = FormatElapsedTime(ElapsedSeconds);
+        if (!multiplayer && hudScoreText != null)
+            hudScoreText.text = sessionScore.ToString();
 
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null) return; // no keyboard device connected (e.g. mobile)
@@ -743,7 +763,7 @@ public class SudokuGameManager : MonoBehaviour
         levelElapsedSeconds = 0f;
         _matchStartUtc = DateTime.UtcNow;
         _matchClockFloor = 0d;
-        _sharedClock = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        _sharedClock = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
 
         // Reset hint pack counter in Mode B
         if (useHintPackSystem)
@@ -793,6 +813,8 @@ public class SudokuGameManager : MonoBehaviour
 
         isGameActive = true;
         GameplayReady = true;
+        if (!_sharedClock)
+            BindGameplayHud();
         if (_sharedClock)
             MultiplayerManager.Instance?.NotifyLocalGameplayReady();
 
@@ -1279,7 +1301,7 @@ public class SudokuGameManager : MonoBehaviour
 
         // In multiplayer the result is shown by MultiplayerResultPanel; skip
         // the single-player output panel so the two don't stack.
-        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
         if (!isMultiplayer)
             ShowOutputPanel(isVictory: true);
     }
@@ -1295,9 +1317,14 @@ public class SudokuGameManager : MonoBehaviour
         isGameActive = false;
         StopRandomSfxLoop();
 
-        bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        bool multiplayer = MultiplayerManager.Instance != null
+            && MultiplayerManager.Instance.IsMultiplayerGame
+            && MultiplayerManager.Instance.IsInSession;
         if (multiplayer)
+        {
+            MultiplayerGameController.Instance?.EndMatchOnLocalLives();
             return;
+        }
 
         ShowRevivePanel();
     }
@@ -1406,6 +1433,7 @@ public class SudokuGameManager : MonoBehaviour
         if (outputScoreText != null) outputScoreText.text = $"SCORE:{sessionScore}";
         if (outputTimeText != null)  outputTimeText.text  = $"TIME: {formattedTime}";
         if (outputTimeValueText != null) outputTimeValueText.text = formattedTime;
+        WriteOutputLives();
 
         // --- Score Stats: best score & new score (Requirement 3) ---
         if (outputNewScoreValueText != null)
@@ -1737,18 +1765,49 @@ public class SudokuGameManager : MonoBehaviour
     private float ReadRunningElapsed()
     {
         var match = MultiplayerManager.Instance;
-        if (_sharedClock && match != null && match.HasSharedClock)
+        bool sharedMatch = _sharedClock
+            && match != null
+            && match.IsMultiplayerGame
+            && match.MatchClockArmed
+            && match.HasSharedClock;
+        if (sharedMatch)
             return match.SharedElapsed;
 
-        if (!_sharedClock)
-            return Mathf.Max(0f, Time.time - levelStartTime);
+        return Mathf.Max(0f, Time.time - levelStartTime);
+    }
 
-        double elapsed = (DateTime.UtcNow - _matchStartUtc).TotalSeconds;
-        if (elapsed < _matchClockFloor)
-            elapsed = _matchClockFloor;
-        else
-            _matchClockFloor = elapsed;
-        return (float)Math.Max(0d, elapsed);
+    private void WriteOutputLives()
+    {
+        if (outputPanel == null) return;
+        int lives = heartManager != null ? heartManager.CurrentLives : 0;
+        Transform root = outputPanel.transform;
+        foreach (var stat in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (stat.name != "LivesStats") continue;
+            TMP_Text[] texts = stat.GetComponentsInChildren<TMP_Text>(true);
+            if (texts.Length > 0)
+                texts[texts.Length - 1].text = lives.ToString();
+        }
+
+        Transform livesRoot = null;
+        foreach (var child in root.GetComponentsInChildren<Transform>(true))
+        {
+            if (child.name != "Lives") continue;
+            livesRoot = child;
+            break;
+        }
+        if (livesRoot == null) return;
+
+        int shown = Mathf.Clamp(lives, 0, livesRoot.childCount);
+        for (int i = 0; i < livesRoot.childCount; i++)
+        {
+            Transform slot = livesRoot.GetChild(i);
+            Transform life = slot.Find("Life");
+            Transform lifeless = slot.Find("Lifeless");
+            bool alive = i < shown;
+            if (life != null) life.gameObject.SetActive(alive);
+            if (lifeless != null) lifeless.gameObject.SetActive(!alive);
+        }
     }
 
     /// <summary>

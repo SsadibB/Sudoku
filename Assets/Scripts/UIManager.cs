@@ -1207,6 +1207,8 @@ public class UIManager : MonoBehaviour
 
     private void LoadGameScene()
     {
+        if (MultiplayerManager.Instance != null)
+            MultiplayerManager.Instance.Disconnect();
         SceneManager.LoadScene(gameSceneName);
     }
 }

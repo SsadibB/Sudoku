@@ -29,6 +29,8 @@ public class MultiplayerGameController : MonoBehaviour
     private bool _matchInitDone;
     private Coroutine _awayWait;
     private NetworkSudokuPlayer _boundLocal;
+    private bool _resultShown;
+    private int _remoteHeartsSeen;
 
     public bool IsMatchRunning => gameStarted;
     public float MatchStartTime => gameStartTime;
@@ -41,7 +43,7 @@ public class MultiplayerGameController : MonoBehaviour
     {
         Instance = this;
 
-        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
 
         if (boardButton == null)
             boardButton = FindOpponentBoardButton();
@@ -83,6 +85,7 @@ public class MultiplayerGameController : MonoBehaviour
 
         // Listen for opponent leaving or forfeiting
         MultiplayerManager.Instance.OnOpponentLeft += HandleOpponentLeft;
+        MultiplayerManager.Instance.OnOpponentOutOfLives += HandleOpponentOutOfLives;
         NetworkSudokuPlayer.OnPlayerForfeited += HandlePlayerForfeited;
 
         gameStartTime = Time.time;
@@ -107,7 +110,10 @@ public class MultiplayerGameController : MonoBehaviour
         }
 
         if (MultiplayerManager.Instance != null)
+        {
             MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentLeft;
+            MultiplayerManager.Instance.OnOpponentOutOfLives -= HandleOpponentOutOfLives;
+        }
 
         NetworkSudokuPlayer.OnPlayerForfeited -= HandlePlayerForfeited;
     }
@@ -150,19 +156,54 @@ public class MultiplayerGameController : MonoBehaviour
         if (_matchInitDone)
             EnsureLocalPlayer();
 
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.OpponentOutOfLives)
+        {
+            HandleOpponentOutOfLives(mp.RemoteDisplayTime);
+            return;
+        }
+
         var remote = ResolveRemote();
         if (remote == null || remote.Object == null || !remote.Object.IsValid) return;
 
         bool forfeited = false;
         bool finished = false;
+        int remoteHearts = -1;
         try
         {
             forfeited = remote.HasForfeited;
             // FinishTime stays 0 when the flag is a stale read during reconnect.
             finished = remote.IsFinished && remote.FinishTime > 0.5f;
+            remoteHearts = remote.HalfHearts;
         }
         catch
         {
+            return;
+        }
+
+        if (remoteHearts > 0)
+            _remoteHeartsSeen = remoteHearts;
+
+        bool clockFrozen = false;
+        try { clockFrozen = remote.ClockFrozen; }
+        catch { clockFrozen = false; }
+
+        bool livesGone = remoteHearts == 0 && _remoteHeartsSeen > 0 && clockFrozen;
+        if (livesGone)
+        {
+            float endTime = CurrentElapsed();
+            try
+            {
+                if (remote.ClockFrozen)
+                    endTime = remote.FrozenElapsed;
+            }
+            catch
+            {
+                // The shared match time is used when the frozen time is not readable yet.
+            }
+            if (mp != null && mp.OpponentClockFrozen)
+                endTime = mp.RemoteDisplayTime;
+            HandleOpponentOutOfLives(endTime);
             return;
         }
 
@@ -429,8 +470,49 @@ public class MultiplayerGameController : MonoBehaviour
         return Mathf.Max(0f, Time.time - gameStartTime);
     }
 
+    /// <summary>
+    /// Local lives reached 0. This player loses and the opponent wins.
+    /// Both clocks freeze at the same match time.
+    /// </summary>
+    public void EndMatchOnLocalLives()
+    {
+        if (_resultShown) return;
+        gameStarted = false;
+
+        var mp = MultiplayerManager.Instance;
+        float elapsed = CurrentElapsed();
+        mp?.FreezeMatchClocks(elapsed);
+        mp?.NoteLocalOutOfLives();
+
+        int score = gameManager != null ? gameManager.SessionScore : 0;
+        NetworkSudokuPlayer.Local?.UpdateScore(score);
+        NetworkSudokuPlayer.Local?.UpdateHalfHearts(0);
+        NetworkSudokuPlayer.Local?.FreezeClock(elapsed);
+
+        ShowResult(isWinner: false, elapsed);
+    }
+
+    private void HandleOpponentOutOfLives(float elapsed)
+    {
+        if (_resultShown || !gameStarted) return;
+        gameStarted = false;
+
+        var mp = MultiplayerManager.Instance;
+        float endTime = Mathf.Max(0f, elapsed);
+        mp?.FreezeMatchClocks(endTime);
+        if (mp != null && !mp.OpponentOutOfLives)
+            mp.NoteOpponentOutOfLives(-1);
+        NetworkSudokuPlayer.Local?.FreezeClock(endTime);
+
+        ShowResult(isWinner: true, endTime);
+    }
+
     private void ShowResult(bool isWinner, float elapsed)
     {
+        if (_resultShown) return;
+        _resultShown = true;
+        gameStarted = false;
+
         var mp = MultiplayerManager.Instance;
         mp?.CaptureResultSnapshot();
 
@@ -469,7 +551,7 @@ public class MultiplayerGameController : MonoBehaviour
     /// </summary>
     public void ShowLocalPlayerForfeit()
     {
-        if (isOpponentLeftHandled) return;
+        if (isOpponentLeftHandled || _resultShown) return;
         isOpponentLeftHandled = true;
         gameStarted = false;
 

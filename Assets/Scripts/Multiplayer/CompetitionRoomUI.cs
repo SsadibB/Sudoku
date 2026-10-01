@@ -53,8 +53,10 @@ public class CompetitionRoomUI : MonoBehaviour
     private Coroutine pastedFeedbackCoroutine;
     private Coroutine holdHintCoroutine;
     private PlayerSearchVisuals hostWaitVisuals;
+    private Button hostStartButton;
     private bool hostSelected;
     private bool hostSlotVisible;
+    private bool hostStartWired;
 
     private void Awake()
     {
@@ -85,6 +87,8 @@ public class CompetitionRoomUI : MonoBehaviour
 
         if (hostWaitGroup != null)
             hostWaitVisuals = PlayerSearchVisuals.Bind(hostWaitGroup.transform);
+        EnsureHostStartButton();
+        SetHostStartEnabled(false);
     }
 
     // ---- Room code tap & hold copy ----
@@ -174,7 +178,7 @@ public class CompetitionRoomUI : MonoBehaviour
 
     private void ShowHoldHint()
     {
-        if (hostStatusText != null && hostStatusText.text.StartsWith("Share this code"))
+        if (hostStatusText != null && hostStatusText.text.StartsWith("Waiting for opponent"))
         {
             if (holdHintCoroutine != null) StopCoroutine(holdHintCoroutine);
             holdHintCoroutine = StartCoroutine(ShowHoldHintRoutine());
@@ -276,7 +280,7 @@ public class CompetitionRoomUI : MonoBehaviour
 
         if (hostStatusText != null && hostStatusText.text == "Copied to clipboard!")
         {
-            hostStatusText.text = "Share this code. Waiting for opponent…";
+            hostStatusText.text = "Waiting for opponent...";
         }
     }
 
@@ -418,6 +422,7 @@ public class CompetitionRoomUI : MonoBehaviour
     {
         hostSlotVisible = false;
         hostSelected = false;
+        SetHostStartEnabled(false);
         hostWaitVisuals?.Stop();
         if (competitionPanel != null) competitionPanel.SetActive(true);
         ShowModeChooser();
@@ -509,8 +514,9 @@ public class CompetitionRoomUI : MonoBehaviour
         SetGroupActive(hostWaitGroup, true);
         hostSlotVisible = true;
 
-        if (hostStatusText != null) hostStatusText.text = "Creating room…";
+        if (hostStatusText != null) hostStatusText.text = "Waiting for opponent...";
         if (roomCodeText != null)   roomCodeText.text = "------";
+        SetHostStartEnabled(false);
         ShowHostWaitLocal();
         hostWaitVisuals?.BeginSearching();
 
@@ -524,7 +530,8 @@ public class CompetitionRoomUI : MonoBehaviour
         if (!string.IsNullOrEmpty(code))
         {
             if (roomCodeText != null) roomCodeText.text = code;
-            if (hostStatusText != null) hostStatusText.text = "Share this code. Waiting for opponent…";
+            if (hostStatusText != null) hostStatusText.text = "Waiting for opponent...";
+            MultiplayerLobbyUI.Instance?.ShowCompetitionHostWaiting(code);
         }
         else
         {
@@ -538,24 +545,27 @@ public class CompetitionRoomUI : MonoBehaviour
     private void OnRoomCodeGenerated(string code)
     {
         if (roomCodeText != null) roomCodeText.text = code;
-        if (hostStatusText != null) hostStatusText.text = "Share this code. Waiting for opponent…";
+        if (hostStatusText != null) hostStatusText.text = "Waiting for opponent...";
+        if (hostSelected)
+            MultiplayerLobbyUI.Instance?.ShowCompetitionHostWaiting(code);
     }
 
     private void OnOpponentJoined()
     {
-        if (hostStatusText != null) hostStatusText.text = "Opponent Found!";
-        ShowHostWaitOpponent();
-
-        if (MultiplayerLobbyUI.Instance != null)
+        if (!hostSelected)
         {
-            MultiplayerLobbyUI.Instance.ShowCompetitionSearching();
-            MultiplayerLobbyUI.Instance.PresentOpponentFound();
+            MultiplayerLobbyUI.Instance?.PresentCompetitionOpponent();
+            return;
         }
+
+        if (hostStatusText != null) hostStatusText.text = "Opponent Found";
+        ShowHostWaitOpponent();
+        SetHostStartEnabled(true);
     }
 
     private void OnOpponentIdentity()
     {
-        if (!hostSlotVisible) return;
+        if (!hostSelected || !hostSlotVisible) return;
         ShowHostWaitLocal();
         ShowHostWaitOpponent();
     }
@@ -575,9 +585,48 @@ public class CompetitionRoomUI : MonoBehaviour
     private void ShowHostWaitOpponent()
     {
         var mp = MultiplayerManager.Instance;
-        string opponentName = mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent";
+        string opponentName = mp != null ? mp.OpponentName : null;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
+        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, false);
+    }
+
+    private void EnsureHostStartButton()
+    {
+        if (hostStartButton != null || hostWaitGroup == null) return;
+        Transform start = FindChildNamed(hostWaitGroup.transform, "StartButton");
+        if (start == null) return;
+        hostStartButton = start.GetComponent<Button>();
+        if (hostStartButton == null || hostStartWired) return;
+        hostStartButton.onClick.AddListener(OnHostStartClicked);
+        hostStartWired = true;
+    }
+
+    private void SetHostStartEnabled(bool enabled)
+    {
+        EnsureHostStartButton();
+        if (hostStartButton == null) return;
+        hostStartButton.gameObject.SetActive(enabled);
+        hostStartButton.interactable = enabled;
+    }
+
+    private void OnHostStartClicked()
+    {
+        if (!hostSelected) return;
+        SoundManager.Instance?.PlaySFX("Button");
+        if (hostStartButton != null) hostStartButton.interactable = false;
+        MultiplayerManager.Instance?.HostStartMatch();
+    }
+
+    private static Transform FindChildNamed(Transform root, string name)
+    {
+        if (root == null) return null;
+        if (root.name == name) return root;
+        for (int i = 0; i < root.childCount; i++)
+        {
+            Transform found = FindChildNamed(root.GetChild(i), name);
+            if (found != null) return found;
+        }
+        return null;
     }
 
     private void OnCancelHostClicked()

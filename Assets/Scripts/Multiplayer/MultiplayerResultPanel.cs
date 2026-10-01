@@ -208,8 +208,8 @@ public class MultiplayerResultPanel : MonoBehaviour
 
     private void OnRematchStateChanged()
     {
-        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.BothWantRematch)
-            MultiplayerManager.Instance.LoadRematchLobby();
+        // Each player opens the searching panel when they press Rematch.
+        // The other player is not pulled out of the result screen.
     }
 
     private void SetWaitingForRematch()

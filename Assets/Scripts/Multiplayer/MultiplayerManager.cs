@@ -81,6 +81,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public event Action OnMatchmakingTimeout;
     public event Action OnOpponentIdentity;
     public event Action OnRematchStateChanged;
+    /// <summary>The opponent's lives reached 0. The argument is the frozen match time.</summary>
+    public event Action<float> OnOpponentOutOfLives;
 
     // ---- State ----
     public NetworkRunner Runner { get; private set; }
@@ -101,8 +103,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public int OpponentProfileLevel { get; private set; } = 1;
     public bool RematchRequestedLocal { get; private set; }
     public bool RematchRequestedRemote { get; private set; }
+    public string RematchOpponentName { get; private set; }
+    public int RematchOpponentAvatar { get; private set; } = -1;
     public bool WantsRematchLobby => RematchRequestedLocal && IsInSession;
     public bool BothWantRematch => RematchRequestedLocal && RematchRequestedRemote;
+
+    public bool IsCompetitionMatch =>
+        !string.IsNullOrEmpty(_sessionName) && _sessionName.StartsWith("COMP_", StringComparison.Ordinal);
+
+    /// <summary>True once the other player in this same room has also accepted the rematch.</summary>
+    public bool IsExpectedRematchOpponent()
+    {
+        return BothWantRematch && IsInSession;
+    }
 
     private const float MatchmakingTimeoutSeconds = 60f;
     private const int MaxPlayersPerRoom = 2;
@@ -141,6 +154,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private bool _remoteGameplayReady;
     private bool _matchClockArmed;
     private float _nextReadySend;
+    private float _nextRematchSend;
 
     public bool MatchClockArmed => _matchClockArmed;
 
@@ -148,6 +162,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public int OpponentLiveScore { get; private set; }
     public int OpponentLiveHalfHearts { get; private set; } = HeartManager.MaxHalfHearts;
     public bool OpponentBackgrounded { get; private set; }
+    public bool OpponentOutOfLives { get; private set; }
+    private bool _forceLocalLivesZero;
+    private bool _forceRemoteLivesZero;
+    private int _forceRemoteScore = -1;
     public bool OpponentClockFrozen => _remoteFrozenElapsed >= 0f;
     public bool HasOpponentClock => _sharedStartSet || _remoteFrozenElapsed >= 0f;
     public bool HasSharedClock => _sharedStartSet;
@@ -207,7 +225,44 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             Debug.LogWarning($"[MultiplayerManager] Result snapshot used the last live stats: {ex.Message}");
         }
 
+        if (_forceLocalLivesZero)
+            SnapshotLocalLives = 0;
+        if (_forceRemoteLivesZero)
+            SnapshotRemoteLives = 0;
+        if (_forceRemoteScore >= 0)
+            SnapshotRemoteScore = _forceRemoteScore;
+
         ResultCaptured = true;
+    }
+
+    /// <summary>
+    /// Freeze both displayed clocks at the same match time before the result snapshot.
+    /// </summary>
+    public void FreezeMatchClocks(float elapsed)
+    {
+        if (ResultCaptured) return;
+        float safe = Mathf.Max(0f, elapsed);
+        if (_localFrozenElapsed < 0f)
+            _localFrozenElapsed = safe;
+        if (_remoteFrozenElapsed < 0f)
+            _remoteFrozenElapsed = safe;
+    }
+
+    public void NoteLocalOutOfLives()
+    {
+        _forceLocalLivesZero = true;
+    }
+
+    public void NoteOpponentOutOfLives(int remoteScore)
+    {
+        OpponentOutOfLives = true;
+        OpponentLiveHalfHearts = 0;
+        _forceRemoteLivesZero = true;
+        if (remoteScore >= 0)
+        {
+            OpponentLiveScore = remoteScore;
+            _forceRemoteScore = remoteScore;
+        }
     }
 
     /// <summary>
@@ -469,6 +524,11 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private void Update()
     {
         if (!IsInSession || _intentionalLeave) return;
+        if (RematchRequestedLocal && Time.unscaledTime >= _nextRematchSend)
+        {
+            _nextRematchSend = Time.unscaledTime + 0.5f;
+            BroadcastRematch();
+        }
         if (_localGameplayReady && !_matchClockArmed && Time.unscaledTime >= _nextReadySend)
         {
             _nextReadySend = Time.unscaledTime + 1f;
@@ -593,6 +653,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             _needsRejoin = false;
             _sessionName = $"INT_{(int)difficulty}";
             ClearOpponentIdentity();
+            ClearRematchFlags();
 
             var runner = await CreateNetworkRunner();
 
@@ -653,6 +714,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             _intentionalLeave = false;
             _needsRejoin = false;
             ClearOpponentIdentity();
+            ClearRematchFlags();
 
             string roomCode = GenerateRoomCode();
             _sessionName = "COMP_" + roomCode;
@@ -716,6 +778,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             _needsRejoin = false;
             _sessionName = "COMP_" + roomCode.ToUpper().Trim();
             ClearOpponentIdentity();
+            ClearRematchFlags();
 
             var runner = await CreateNetworkRunner();
 
@@ -743,6 +806,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
             KeepSessionAliveInBackground();
             StartCoroutine(ConfigureRoomSoon());
+            StartCoroutine(AnnounceOpponentSoon());
             OnConnectedToRoom?.Invoke();
         }
         finally
@@ -886,23 +950,45 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     void INetworkRunnerCallbacks.OnPlayerJoined(NetworkRunner runner, PlayerRef player)
     {
-        int playerCount = 0;
-        foreach (var _ in runner.ActivePlayers) playerCount++;
-
-        if (playerCount >= 2 && waitingForOpponent)
+        if (player != runner.LocalPlayer)
         {
-            waitingForOpponent = false;
-            if (matchmakingTimeoutCoroutine != null)
-            {
-                StopCoroutine(matchmakingTimeoutCoroutine);
-                matchmakingTimeoutCoroutine = null;
-            }
+            _opponentPlayer = player;
+            _hasOpponentPlayer = true;
+        }
 
-            BroadcastIdentity();
-            OnOpponentJoined?.Invoke();
-            if (identityResendCoroutine != null)
-                StopCoroutine(identityResendCoroutine);
-            identityResendCoroutine = StartCoroutine(ResendIdentity());
+        AnnounceOpponentIfPresent();
+    }
+
+    private void AnnounceOpponentIfPresent()
+    {
+        if (!waitingForOpponent || Runner == null || !Runner.IsRunning) return;
+
+        int playerCount = 0;
+        foreach (var _ in Runner.ActivePlayers) playerCount++;
+        if (playerCount < 2) return;
+
+        waitingForOpponent = false;
+        if (matchmakingTimeoutCoroutine != null)
+        {
+            StopCoroutine(matchmakingTimeoutCoroutine);
+            matchmakingTimeoutCoroutine = null;
+        }
+
+        BroadcastIdentity();
+        OnOpponentJoined?.Invoke();
+        if (identityResendCoroutine != null)
+            StopCoroutine(identityResendCoroutine);
+        identityResendCoroutine = StartCoroutine(ResendIdentity());
+    }
+
+    private IEnumerator AnnounceOpponentSoon()
+    {
+        for (int i = 0; i < 20; i++)
+        {
+            if (!waitingForOpponent) yield break;
+            AnnounceOpponentIfPresent();
+            if (!waitingForOpponent) yield break;
+            yield return null;
         }
     }
 
@@ -953,9 +1039,34 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         SendToOthers(IdentityKey, Encoding.UTF8.GetBytes(payload));
     }
 
+    private PlayerRef _opponentPlayer;
+    private bool _hasOpponentPlayer;
+
     private void BroadcastRematch()
     {
-        SendToOthers(RematchKey, Encoding.UTF8.GetBytes("1"));
+        if (Runner == null || !Runner.IsRunning) return;
+        byte[] payload = Encoding.UTF8.GetBytes("1");
+        bool sent = false;
+        foreach (var other in Runner.ActivePlayers)
+        {
+            if (other == Runner.LocalPlayer) continue;
+            _opponentPlayer = other;
+            _hasOpponentPlayer = true;
+            Runner.SendReliableDataToPlayer(other, RematchKey, payload);
+            sent = true;
+        }
+
+        if (!sent && _hasOpponentPlayer && _opponentPlayer != Runner.LocalPlayer)
+        {
+            try
+            {
+                Runner.SendReliableDataToPlayer(_opponentPlayer, RematchKey, payload);
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning($"[MultiplayerManager] Rematch send skipped: {ex.Message}");
+            }
+        }
     }
 
     private void SendToOthers(ReliableKey key, byte[] payload)
@@ -978,6 +1089,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentLiveScore = 0;
         OpponentLiveHalfHearts = HeartManager.MaxHalfHearts;
         OpponentBackgrounded = false;
+        OpponentOutOfLives = false;
+        _forceLocalLivesZero = false;
+        _forceRemoteLivesZero = false;
+        _forceRemoteScore = -1;
         _opponentLevelLocked = false;
         _sharedStartSet = false;
         _localFrozenElapsed = -1f;
@@ -997,6 +1112,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         RematchRequestedLocal = false;
         RematchRequestedRemote = false;
+        RematchOpponentName = null;
+        RematchOpponentAvatar = -1;
+        _hasOpponentPlayer = false;
     }
 
     /// <summary>
@@ -1020,13 +1138,38 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public void RequestRematch()
     {
+        RememberRematchTarget();
         RematchRequestedLocal = true;
         awaitHostStart = true;
         sceneLoadRequested = false;
+        rematchLobbyRequested = false;
+        _nextRematchSend = Time.unscaledTime + 0.5f;
         BroadcastRematch();
+        BroadcastIdentity();
+        FlushFusionClient();
         OnRematchStateChanged?.Invoke();
-        if (BothWantRematch)
-            LoadRematchLobby();
+
+        // Leave the result screen on this phone only. The other player stays
+        // where they are until they accept the rematch.
+        if (SceneManager.GetActiveScene().name != "MainMenu")
+            StartCoroutine(OpenRematchMenuSoon());
+    }
+
+    private IEnumerator OpenRematchMenuSoon()
+    {
+        yield return null;
+        BroadcastRematch();
+        FlushFusionClient();
+        if (SceneManager.GetActiveScene().name != "MainMenu")
+            SceneManager.LoadScene("MainMenu");
+    }
+
+    private void RememberRematchTarget()
+    {
+        if (IsRealPlayerName(OpponentName))
+            RematchOpponentName = OpponentName;
+        if (OpponentAvatarIndex >= 0)
+            RematchOpponentAvatar = OpponentAvatarIndex;
     }
 
     public void LoadRematchLobby()
@@ -1262,6 +1405,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         else if (keyId == 2)
         {
+            if (RematchRequestedRemote) return;
             RematchRequestedRemote = true;
             OnRematchStateChanged?.Invoke();
         }
@@ -1277,16 +1421,28 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         else if (keyId == 4)
         {
             string[] parts = payload.Split('\n');
+            float incoming = -1f;
+            bool frozen = parts.Length > 3 && parts[3].Trim() == "1";
             if (parts.Length > 0 && int.TryParse(parts[0], out int centi))
             {
-                float incoming = Mathf.Max(0f, centi / 100f);
-                bool frozen = parts.Length > 3 && parts[3].Trim() == "1";
+                incoming = Mathf.Max(0f, centi / 100f);
                 AdoptAuthoritativeElapsed(incoming, frozen);
             }
             if (parts.Length > 1 && int.TryParse(parts[1], out int score))
                 OpponentLiveScore = Mathf.Max(0, score);
             if (parts.Length > 2 && int.TryParse(parts[2], out int hearts))
+            {
                 OpponentLiveHalfHearts = Mathf.Clamp(hearts, 0, HeartManager.MaxHalfHearts);
+                // An explicit frozen 0-life report ends the match. Screen state does not.
+                if (hearts <= 0 && frozen && _matchClockArmed && !ResultCaptured && !OpponentOutOfLives)
+                {
+                    int reportedScore = -1;
+                    if (parts.Length > 1 && int.TryParse(parts[1], out int deadScore))
+                        reportedScore = Mathf.Max(0, deadScore);
+                    NoteOpponentOutOfLives(reportedScore);
+                    OnOpponentOutOfLives?.Invoke(incoming >= 0f ? incoming : RemoteDisplayTime);
+                }
+            }
         }
     }
     void INetworkRunnerCallbacks.OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress) { }
