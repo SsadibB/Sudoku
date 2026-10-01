@@ -88,6 +88,7 @@ public class MultiplayerGameController : MonoBehaviour
         gameStartTime = Time.time;
         gameStarted = true;
         MultiplayerManager.Instance?.KeepSessionAliveInBackground();
+        MultiplayerManager.Instance?.EnsureSharedClock();
 
         StartCoroutine(InitNetworkPlayerAndBoard());
     }
@@ -115,6 +116,24 @@ public class MultiplayerGameController : MonoBehaviour
     {
         if (!gameStarted) return;
         MultiplayerManager.Instance?.KeepSessionAliveInBackground();
+        if (!pause)
+            FlushLocalClock();
+    }
+
+    private void OnApplicationFocus(bool hasFocus)
+    {
+        if (!gameStarted || !hasFocus) return;
+        FlushLocalClock();
+    }
+
+    private void FlushLocalClock()
+    {
+        var mp = MultiplayerManager.Instance;
+        mp?.EnsureSharedClock();
+        float elapsed = mp != null && mp.HasSharedClock
+            ? mp.SharedElapsed
+            : (gameManager != null ? gameManager.ElapsedSeconds : 0f);
+        NetworkSudokuPlayer.Local?.FlushElapsed(elapsed);
     }
 
     private void OnApplicationQuit()
@@ -132,31 +151,53 @@ public class MultiplayerGameController : MonoBehaviour
             EnsureLocalPlayer();
 
         var remote = ResolveRemote();
-        if (remote == null) return;
+        if (remote == null || remote.Object == null || !remote.Object.IsValid) return;
 
-        if (remote.HasForfeited)
+        bool forfeited = false;
+        bool finished = false;
+        try
+        {
+            forfeited = remote.HasForfeited;
+            // FinishTime stays 0 when the flag is a stale read during reconnect.
+            finished = remote.IsFinished && remote.FinishTime > 0.5f;
+        }
+        catch
+        {
+            return;
+        }
+
+        if (forfeited)
             ConcludeOpponentGone();
-        else if (remote.IsFinished)
+        else if (finished)
         {
             gameStarted = false;
-            float elapsed = gameManager != null
-                ? gameManager.ElapsedSeconds
-                : Mathf.Max(0f, Time.time - gameStartTime);
-            gameManager?.EndGameForMultiplayer();
-            ShowResult(isWinner: false, elapsed);
+            ShowResult(isWinner: false, CurrentElapsed());
         }
     }
 
     private void LateUpdate()
     {
-        float elapsed = gameManager != null
-            ? gameManager.ElapsedSeconds
-            : Mathf.Max(0f, Time.time - gameStartTime);
+        var mp = MultiplayerManager.Instance;
+        bool clockRunning = mp != null && mp.MatchClockArmed;
+        if (gameStarted && clockRunning)
+        {
+            mp.EnsureSharedClock();
+            mp.PullAuthoritativeClock();
+        }
 
-        if (gameStarted)
+        float elapsed = clockRunning && mp.HasSharedClock
+            ? mp.SharedElapsed
+            : (mp != null && mp.IsInSession
+                ? 0f
+                : (gameManager != null ? gameManager.ElapsedSeconds : Mathf.Max(0f, Time.time - gameStartTime)));
+
+        if (gameStarted && clockRunning)
             NetworkSudokuPlayer.Local?.UpdateElapsed(elapsed);
 
-        RefreshMatchHud(elapsed);
+        if (mp != null && mp.ResultCaptured)
+            return;
+
+        RefreshMatchHud(mp != null && mp.HasSharedClock ? mp.LocalDisplayTime : elapsed);
     }
 
     private IEnumerator InitNetworkPlayerAndBoard()
@@ -293,23 +334,32 @@ public class MultiplayerGameController : MonoBehaviour
     {
         if (isOpponentLeftHandled) return;
 
-        var mp = MultiplayerManager.Instance;
-        bool away = mp != null && (mp.SuppressOpponentLeft || mp.OpponentBackgrounded);
         var remote = ResolveRemote();
-        if (away && (remote == null || !remote.HasForfeited))
+        bool forfeited = false;
+        if (remote != null && remote.Object != null && remote.Object.IsValid)
         {
-            if (_awayWait == null)
-                _awayWait = StartCoroutine(WaitForAwayOpponent());
+            try { forfeited = remote.HasForfeited; }
+            catch { forfeited = false; }
+        }
+        if (forfeited)
+        {
+            ConcludeOpponentGone();
             return;
         }
 
-        ConcludeOpponentGone();
+        // Screen-off and a dropped socket are not a finished game.
+        // Wait for them to return, or for an explicit forfeit.
+        if (_awayWait == null)
+            _awayWait = StartCoroutine(WaitForAwayOpponent());
     }
 
     private IEnumerator WaitForAwayOpponent()
     {
-        float deadline = Time.realtimeSinceStartup + 180f;
-        while (Time.realtimeSinceStartup < deadline)
+        // A dropped connection without a screen-off notice can still be a
+        // brief network blip. A known screen-off is allowed to last much longer.
+        float goneDeadline = Time.realtimeSinceStartup + 180f;
+        float awayDeadline = Time.realtimeSinceStartup + 600f;
+        while (Time.realtimeSinceStartup < awayDeadline)
         {
             if (isOpponentLeftHandled)
             {
@@ -318,21 +368,27 @@ public class MultiplayerGameController : MonoBehaviour
             }
 
             var remote = ResolveRemote();
-            if (remote != null && remote.HasForfeited)
-                break;
-
             var mp = MultiplayerManager.Instance;
-            bool weAreAway = mp != null && mp.SuppressOpponentLeft;
             bool theyAreAway = mp != null && mp.OpponentBackgrounded;
-            bool theyAreHere = remote != null && remote.Object != null && remote.Object.IsValid && !theyAreAway;
-
-            if (!weAreAway && theyAreHere)
+            bool theyAreHere = remote != null && remote.Object != null && remote.Object.IsValid;
+            if (theyAreHere)
             {
-                _awayWait = null;
-                yield break;
+                bool stillForfeited = false;
+                try { stillForfeited = remote.HasForfeited; }
+                catch { stillForfeited = false; }
+                if (stillForfeited)
+                    break;
+
+                if (!theyAreAway)
+                {
+                    _awayWait = null;
+                    yield break;
+                }
             }
 
-            if (!weAreAway && !theyAreAway && remote == null)
+            if (theyAreAway)
+                goneDeadline = Time.realtimeSinceStartup + 180f;
+            else if (!theyAreHere && Time.realtimeSinceStartup >= goneDeadline)
                 break;
 
             yield return null;
@@ -354,10 +410,7 @@ public class MultiplayerGameController : MonoBehaviour
             _awayWait = null;
         }
 
-        gameManager?.EndGameForMultiplayer();
-
-        float elapsed = Time.time - gameStartTime;
-        ShowResult(isWinner: true, elapsed);
+        ShowResult(isWinner: true, CurrentElapsed());
     }
 
     private void HandlePlayerForfeited(NetworkSudokuPlayer player)
@@ -366,15 +419,37 @@ public class MultiplayerGameController : MonoBehaviour
         ConcludeOpponentGone();
     }
 
+    private float CurrentElapsed()
+    {
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.HasSharedClock)
+            return mp.SharedElapsed;
+        if (gameManager != null)
+            return gameManager.ElapsedSeconds;
+        return Mathf.Max(0f, Time.time - gameStartTime);
+    }
+
     private void ShowResult(bool isWinner, float elapsed)
     {
-        gameManager?.EndGameForMultiplayer();
+        var mp = MultiplayerManager.Instance;
+        mp?.CaptureResultSnapshot();
+
+        if (gameManager != null && gameManager.IsGameActive)
+            gameManager.EndGameForMultiplayer();
+
+        float shown = mp != null && mp.ResultCaptured
+            ? mp.LocalDisplayTime
+            : (gameManager != null ? gameManager.ElapsedSeconds : Mathf.Max(0f, elapsed));
+        NetworkSudokuPlayer.Local?.FreezeClock(shown);
 
         if (opponentBoardPanel != null)
             opponentBoardPanel.Hide();
 
         if (resultPanel != null)
-            resultPanel.Show(isWinner, elapsed);
+            resultPanel.Show(isWinner, shown);
+
+        // Write the snapshot into the output stats once. Later frames do not refresh them.
+        RefreshMatchHud(shown);
     }
 
     // ---- Public API for OpponentBoardPanel button ----
@@ -398,6 +473,8 @@ public class MultiplayerGameController : MonoBehaviour
         isOpponentLeftHandled = true;
         gameStarted = false;
 
+        // Snapshot both players before the clock is allowed to move again.
+        MultiplayerManager.Instance?.CaptureResultSnapshot();
         gameManager?.EndGameForMultiplayer();
 
         // Notify the opponent over the network.
@@ -406,8 +483,7 @@ public class MultiplayerGameController : MonoBehaviour
         // Show lose result to the leaving player.
         // Do NOT call Disconnect() here — MultiplayerResultPanel.OnReturnToMenu
         // already calls Disconnect() and loads MainMenu when the player taps the button.
-        float elapsed = Time.time - gameStartTime;
-        ShowResult(isWinner: false, elapsed);
+        ShowResult(isWinner: false, CurrentElapsed());
     }
 
     private void EnsureLocalPlayer()
@@ -490,6 +566,36 @@ public class MultiplayerGameController : MonoBehaviour
         RefreshMatchHud(0f);
     }
 
+    private static bool RemoteClockStopped(NetworkSudokuPlayer remote)
+    {
+        if (remote == null || remote.Object == null || !remote.Object.IsValid) return false;
+        try
+        {
+            return remote.HasForfeited || (remote.IsFinished && remote.FinishTime > 0.5f);
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static float StoppedRemoteTime(NetworkSudokuPlayer remote, float matchTime)
+    {
+        try
+        {
+            if (remote != null && remote.FinishTime > 0.5f)
+                return remote.FinishTime;
+        }
+        catch
+        {
+            // Keep the shared match time if the finish time is not readable yet.
+        }
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.OpponentClockFrozen)
+            return mp.RemoteDisplayTime;
+        return matchTime;
+    }
+
     private static NetworkSudokuPlayer ResolveRemote()
     {
         if (NetworkSudokuPlayer.Remote != null)
@@ -527,31 +633,48 @@ public class MultiplayerGameController : MonoBehaviour
         var remote = ResolveRemote();
         var mp = MultiplayerManager.Instance;
 
-        string localName = local != null ? local.PlayerName.ToString() : (mp != null ? mp.LocalPlayerName : "You");
-        int localLevel = local != null && local.ProfileLevel > 0
-            ? local.ProfileLevel
-            : (ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1);
-        int localLives = local != null
-            ? local.HalfHearts / 2
-            : (gameManager != null ? gameManager.CurrentHalfHearts / 2 : HeartManager.MaxLives);
-        int localScore = gameManager != null ? gameManager.SessionScore : (local != null ? local.Score : 0);
+        string localName = mp != null && IsRealHudName(mp.LocalPlayerName)
+            ? mp.LocalPlayerName
+            : ReadNetworkName(local, "You");
+        int localLevel = ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1;
+        bool frozen = mp != null && mp.ResultCaptured;
+        int localLives = frozen
+            ? mp.SnapshotLocalLives
+            : (local != null
+                ? local.HalfHearts / 2
+                : (gameManager != null ? gameManager.CurrentHalfHearts / 2 : HeartManager.MaxLives));
+        int localScore = frozen
+            ? mp.SnapshotLocalScore
+            : (gameManager != null ? gameManager.SessionScore : (local != null ? local.Score : 0));
+        if (frozen)
+            elapsed = mp.LocalDisplayTime;
+        else if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
+            elapsed = 0f;
+        else if (mp != null && mp.HasSharedClock)
+            elapsed = mp.SharedElapsed;
         Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
 
         if (playerSide != null)
             ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar);
 
-        string remoteName = remote != null && !string.IsNullOrEmpty(remote.PlayerName.ToString())
-            ? remote.PlayerName.ToString()
-            : (mp != null && !string.IsNullOrEmpty(mp.OpponentName) ? mp.OpponentName : "Opponent");
-        int remoteLevel = remote != null && remote.ProfileLevel > 0
-            ? remote.ProfileLevel
-            : (mp != null ? mp.OpponentProfileLevel : 1);
-        int remoteScore = remote != null ? remote.Score : (mp != null ? mp.OpponentLiveScore : 0);
-        float remoteTime = mp != null ? mp.OpponentElapsedSmooth : 0f;
-        if (remote != null)
-            remoteTime = Mathf.Max(remoteTime, remote.VisibleElapsed);
-        int remoteHearts = remote != null ? remote.HalfHearts : (mp != null ? mp.OpponentLiveHalfHearts : 0);
-        int remoteLives = Mathf.Max(0, remoteHearts) / 2;
+        string networkName = ReadNetworkName(remote, null);
+        if (mp != null)
+            mp.RememberOpponent(networkName, 0);
+        string remoteName = mp != null && IsRealHudName(mp.OpponentName)
+            ? mp.OpponentName
+            : (networkName ?? "Opponent");
+        int remoteLevel = mp != null ? mp.OpponentProfileLevel : 1;
+        int remoteScore = frozen
+            ? mp.SnapshotRemoteScore
+            : (remote != null ? remote.Score : (mp != null ? mp.OpponentLiveScore : 0));
+        float remoteTime = elapsed;
+        if (frozen)
+            remoteTime = mp.RemoteDisplayTime;
+        else if (RemoteClockStopped(remote))
+            remoteTime = StoppedRemoteTime(remote, elapsed);
+        int remoteLives = frozen
+            ? mp.SnapshotRemoteLives
+            : Mathf.Max(0, remote != null ? remote.HalfHearts : (mp != null ? mp.OpponentLiveHalfHearts : 0)) / 2;
         Sprite remoteAvatar = null;
         if (remote != null && ProfileManager.Instance != null)
             remoteAvatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
@@ -639,6 +762,27 @@ public class MultiplayerGameController : MonoBehaviour
             bool alive = i < shown;
             if (life != null) life.gameObject.SetActive(alive);
             if (lifeless != null) lifeless.gameObject.SetActive(!alive);
+        }
+    }
+
+    private static bool IsRealHudName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        return !name.Trim().Equals("Opponent", System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string ReadNetworkName(NetworkSudokuPlayer player, string fallback)
+    {
+        if (player == null || player.Object == null || !player.Object.IsValid)
+            return fallback;
+        try
+        {
+            string name = player.PlayerName.ToString();
+            return string.IsNullOrWhiteSpace(name) ? fallback : name.Trim();
+        }
+        catch
+        {
+            return fallback;
         }
     }
 

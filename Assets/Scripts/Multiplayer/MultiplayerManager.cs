@@ -118,6 +118,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private static readonly ReliableKey RematchKey = ReliableKey.FromInts(2, 0, 0, 0);
     private static readonly ReliableKey AwayKey = ReliableKey.FromInts(3, 0, 0, 0);
     private static readonly ReliableKey ClockKey = ReliableKey.FromInts(4, 0, 0, 0);
+    private static readonly ReliableKey ReadyKey = ReliableKey.FromInts(5, 0, 0, 0);
 
     private string _sessionName;
     private bool _intentionalLeave;
@@ -130,13 +131,84 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private int _lastClockCenti = -1;
     private float _nextClockSend;
-    private float _opponentClockReceivedAt = -1f;
-    private float _smoothFloor;
+    private float _nextIdentitySend;
+    private DateTime _sharedStartUtc;
+    private bool _sharedStartSet;
+    private float _localFrozenElapsed = -1f;
+    private float _remoteFrozenElapsed = -1f;
+    private bool _opponentLevelLocked;
+    private bool _localGameplayReady;
+    private bool _remoteGameplayReady;
+    private bool _matchClockArmed;
+    private float _nextReadySend;
+
+    public bool MatchClockArmed => _matchClockArmed;
 
     public float OpponentElapsedSeconds { get; private set; }
     public int OpponentLiveScore { get; private set; }
     public int OpponentLiveHalfHearts { get; private set; } = HeartManager.MaxHalfHearts;
     public bool OpponentBackgrounded { get; private set; }
+    public bool OpponentClockFrozen => _remoteFrozenElapsed >= 0f;
+    public bool HasOpponentClock => _sharedStartSet || _remoteFrozenElapsed >= 0f;
+    public bool HasSharedClock => _sharedStartSet;
+
+    /// <summary>Match time from the shared start. Screen-off does not stop it.</summary>
+    public float SharedElapsed =>
+        _sharedStartSet ? (float)Math.Max(0d, (DateTime.UtcNow - _sharedStartUtc).TotalSeconds) : 0f;
+
+    public float LocalDisplayTime => _localFrozenElapsed >= 0f ? _localFrozenElapsed : SharedElapsed;
+    public float RemoteDisplayTime => _remoteFrozenElapsed >= 0f ? _remoteFrozenElapsed : SharedElapsed;
+    public bool ResultCaptured { get; private set; }
+    public int SnapshotLocalScore { get; private set; }
+    public int SnapshotRemoteScore { get; private set; }
+    public int SnapshotLocalLives { get; private set; }
+    public int SnapshotRemoteLives { get; private set; }
+
+    /// <summary>
+    /// Copy the current match clock, scores, and lives. Later ticks do not change it.
+    /// </summary>
+    public void CaptureResultSnapshot()
+    {
+        if (ResultCaptured) return;
+        EnsureSharedClock();
+
+        float now = HasSharedClock ? SharedElapsed : Mathf.Max(0f, OpponentElapsedSeconds);
+        if (_localFrozenElapsed < 0f)
+            _localFrozenElapsed = now;
+        if (_remoteFrozenElapsed < 0f)
+            _remoteFrozenElapsed = now;
+
+        var game = SudokuGameManager.Instance;
+        var local = NetworkSudokuPlayer.Local;
+        var remote = NetworkSudokuPlayer.Remote;
+        SnapshotLocalScore = game != null ? game.SessionScore : 0;
+        SnapshotLocalLives = game != null ? game.CurrentHalfHearts / 2 : 0;
+        SnapshotRemoteScore = OpponentLiveScore;
+        SnapshotRemoteLives = Mathf.Max(0, OpponentLiveHalfHearts) / 2;
+
+        try
+        {
+            if (local != null && local.Object != null && local.Object.IsValid)
+            {
+                if (game == null)
+                {
+                    SnapshotLocalScore = local.Score;
+                    SnapshotLocalLives = local.HalfHearts / 2;
+                }
+            }
+            if (remote != null && remote.Object != null && remote.Object.IsValid)
+            {
+                SnapshotRemoteScore = remote.Score;
+                SnapshotRemoteLives = Mathf.Max(0, remote.HalfHearts) / 2;
+            }
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Result snapshot used the last live stats: {ex.Message}");
+        }
+
+        ResultCaptured = true;
+    }
 
     /// <summary>
     /// True while this device is in the background. Opponent-left events during
@@ -144,19 +216,155 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     /// </summary>
     public bool SuppressOpponentLeft => _backgrounded && !_intentionalLeave;
 
-    public float OpponentElapsedSmooth
-    {
-        get
-        {
-            float value = OpponentElapsedSeconds;
-            if (_opponentClockReceivedAt >= 0f)
-                value += Mathf.Clamp(Time.unscaledTime - _opponentClockReceivedAt, 0f, 1.25f);
+    public float OpponentElapsedSmooth => RemoteDisplayTime;
 
-            if (value + 1f < _smoothFloor)
-                _smoothFloor = value;
-            else if (value > _smoothFloor)
-                _smoothFloor = value;
-            return _smoothFloor;
+    /// <summary>
+    /// Local loading has finished. The match clock starts only after both phones are ready,
+    /// so a slow loading screen does not leave one timer behind.
+    /// </summary>
+    public void NotifyLocalGameplayReady()
+    {
+        if (!IsInSession || _intentionalLeave) return;
+        _localGameplayReady = true;
+        SendToOthers(ReadyKey, Encoding.UTF8.GetBytes("1"));
+        _nextReadySend = Time.unscaledTime + 1f;
+        TryArmMatchClock();
+    }
+
+    /// <summary>Start the clock if the other phone never reports ready.</summary>
+    public void ArmMatchClockNow()
+    {
+        if (_matchClockArmed || ResultCaptured) return;
+        float remoteElapsed = ReadNetworkElapsed(NetworkSudokuPlayer.Remote);
+        ArmFromElapsed(remoteElapsed > 5f ? remoteElapsed : 0f);
+    }
+
+    private void TryArmMatchClock()
+    {
+        if (_matchClockArmed || ResultCaptured || !_localGameplayReady) return;
+
+        float remoteElapsed = ReadNetworkElapsed(NetworkSudokuPlayer.Remote);
+        if (remoteElapsed > 5f)
+        {
+            ArmFromElapsed(remoteElapsed);
+            return;
+        }
+
+        if (!_remoteGameplayReady) return;
+        if (Runner != null && Runner.IsRunning && !Runner.IsSharedModeMasterClient)
+            return;
+
+        ArmFromElapsed(0f);
+    }
+
+    private void ArmFromElapsed(float elapsed)
+    {
+        if (_matchClockArmed) return;
+        float startAt = Mathf.Max(0f, elapsed);
+        _sharedStartUtc = DateTime.UtcNow.AddSeconds(-startAt);
+        _sharedStartSet = true;
+        _matchClockArmed = true;
+        SudokuGameManager.Instance?.AlignMatchClock(startAt);
+        NetworkSudokuPlayer.Local?.FlushElapsed(startAt);
+    }
+
+    /// <summary>
+    /// The shared clock is started in ArmFromElapsed, after both phones have loaded.
+    /// </summary>
+    public void EnsureSharedClock()
+    {
+        if (_sharedStartSet || ResultCaptured || !_matchClockArmed) return;
+        _sharedStartUtc = DateTime.UtcNow;
+        _sharedStartSet = true;
+    }
+
+    /// <summary>
+    /// Move this phone forward to the latest match time either player has reached.
+    /// A later local start must not keep this device behind.
+    /// </summary>
+    public void PullAuthoritativeClock()
+    {
+        if (ResultCaptured || !_matchClockArmed) return;
+
+        float best = _sharedStartSet ? SharedElapsed : -1f;
+
+        float remoteElapsed = ReadNetworkElapsed(NetworkSudokuPlayer.Remote);
+        if (remoteElapsed >= 0f)
+            best = Mathf.Max(best, remoteElapsed);
+
+        if (best < 0f) return;
+        if (_sharedStartSet && best > SharedElapsed + 600f) return;
+        if (_sharedStartSet && best <= SharedElapsed + 0.05f) return;
+
+        _sharedStartUtc = DateTime.UtcNow.AddSeconds(-best);
+        _sharedStartSet = true;
+    }
+
+    private float ReadNetworkElapsed(NetworkSudokuPlayer player)
+    {
+        if (player == null || player.Object == null || !player.Object.IsValid) return -1f;
+        float sample;
+        try
+        {
+            if (player.HasForfeited) return -1f;
+            sample = Mathf.Max(player.ElapsedTime, player.ElapsedWholeSeconds);
+            if (player.ClockFrozen && player.FrozenElapsed > sample)
+                sample = player.FrozenElapsed;
+        }
+        catch
+        {
+            return -1f;
+        }
+
+        if (sample < 0f || sample > 21600f) return -1f;
+        return sample;
+    }
+
+    public void FreezeLocalClock()
+    {
+        if (_localFrozenElapsed >= 0f) return;
+        EnsureSharedClock();
+        if (_sharedStartSet)
+        {
+            _localFrozenElapsed = SharedElapsed;
+            return;
+        }
+
+        float fallback = 0f;
+        var game = SudokuGameManager.Instance;
+        if (game != null)
+            fallback = Mathf.Max(0f, game.ElapsedSeconds);
+        _localFrozenElapsed = fallback;
+    }
+
+    private void AdoptAuthoritativeElapsed(float elapsed, bool frozen)
+    {
+        if (elapsed < 0f) return;
+        OpponentElapsedSeconds = elapsed;
+        if (frozen)
+        {
+            // The open result panel keeps the time it captured.
+            if (!ResultCaptured || _remoteFrozenElapsed < 0f)
+                _remoteFrozenElapsed = elapsed;
+            return;
+        }
+
+        if (!_matchClockArmed)
+        {
+            if (_localGameplayReady && (_remoteGameplayReady || elapsed > 5f))
+                ArmFromElapsed(elapsed);
+            return;
+        }
+
+        if (ResultCaptured)
+            return;
+
+        // The further match time wins, on either phone.
+        float shown = _sharedStartSet ? SharedElapsed : -1f;
+        if (!_sharedStartSet || elapsed > shown + 0.05f)
+        {
+            _sharedStartUtc = DateTime.UtcNow.AddSeconds(-elapsed);
+            _sharedStartSet = true;
         }
     }
 
@@ -221,6 +429,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         AnnounceBackground(false);
+        BroadcastIdentity();
+        FlushMatchClock();
         if (_opponentLeftWhileAway)
         {
             _opponentLeftWhileAway = false;
@@ -244,6 +454,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         AnnounceBackground(false);
+        BroadcastIdentity();
+        FlushMatchClock();
         if (_opponentLeftWhileAway)
         {
             _opponentLeftWhileAway = false;
@@ -254,21 +466,44 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         RejoinActiveSession();
     }
 
+    private void Update()
+    {
+        if (!IsInSession || _intentionalLeave) return;
+        if (_localGameplayReady && !_matchClockArmed && Time.unscaledTime >= _nextReadySend)
+        {
+            _nextReadySend = Time.unscaledTime + 1f;
+            SendToOthers(ReadyKey, Encoding.UTF8.GetBytes("1"));
+            TryArmMatchClock();
+        }
+        if (Time.unscaledTime < _nextIdentitySend) return;
+        _nextIdentitySend = Time.unscaledTime + 3f;
+        BroadcastIdentity();
+    }
+
+    private void FlushMatchClock()
+    {
+        var match = MultiplayerGameController.Instance;
+        if (match == null || !match.IsMatchRunning) return;
+        EnsureSharedClock();
+        float elapsed = HasSharedClock ? SharedElapsed : 0f;
+        NetworkSudokuPlayer.Local?.FlushElapsed(elapsed);
+    }
+
     /// <summary>
     /// Pushes the live clock, score, and hearts to the opponent.
     /// Throttled; score and hearts still replicate on their own networked fields.
     /// </summary>
-    public void PublishLiveStats(float elapsed, int score, int halfHearts)
+    public void PublishLiveStats(float elapsed, int score, int halfHearts, bool frozen = false, bool force = false)
     {
         if (Runner == null || !Runner.IsRunning || elapsed < 0f) return;
 
         int centi = Mathf.FloorToInt(elapsed * 100f);
         bool sameSecond = _lastClockCenti >= 0 && centi / 100 == _lastClockCenti / 100;
-        if (sameSecond && Time.unscaledTime < _nextClockSend) return;
+        if (!frozen && !force && sameSecond && Time.unscaledTime < _nextClockSend) return;
 
         _lastClockCenti = centi;
         _nextClockSend = Time.unscaledTime + 0.2f;
-        string payload = centi + "\n" + score + "\n" + halfHearts;
+        string payload = centi + "\n" + score + "\n" + halfHearts + "\n" + (frozen ? "1" : "0");
         SendToOthers(ClockKey, Encoding.UTF8.GetBytes(payload));
     }
 
@@ -680,6 +915,34 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         identityResendCoroutine = null;
     }
 
+    public void RememberOpponent(string name, int profileLevel)
+    {
+        if (IsRealPlayerName(name) && string.IsNullOrEmpty(OpponentName))
+            OpponentName = name.Trim();
+        if (!_opponentLevelLocked && IsSaneProfileLevel(profileLevel))
+        {
+            OpponentProfileLevel = profileLevel;
+            _opponentLevelLocked = true;
+        }
+    }
+
+    private static bool IsRealPlayerName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return false;
+        name = name.Trim();
+        if (name.Equals("Opponent", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Player", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.StartsWith("Player_", StringComparison.Ordinal)) return false;
+        for (int i = 0; i < name.Length; i++)
+        {
+            if (!char.IsDigit(name[i]))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsSaneProfileLevel(int level) => level >= 1 && level <= 300;
+
     private void BroadcastIdentity()
     {
         if (Runner == null) return;
@@ -715,8 +978,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentLiveScore = 0;
         OpponentLiveHalfHearts = HeartManager.MaxHalfHearts;
         OpponentBackgrounded = false;
-        _opponentClockReceivedAt = -1f;
-        _smoothFloor = 0f;
+        _opponentLevelLocked = false;
+        _sharedStartSet = false;
+        _localFrozenElapsed = -1f;
+        _remoteFrozenElapsed = -1f;
+        _localGameplayReady = false;
+        _remoteGameplayReady = false;
+        _matchClockArmed = false;
+        ResultCaptured = false;
+        SnapshotLocalScore = 0;
+        SnapshotRemoteScore = 0;
+        SnapshotLocalLives = 0;
+        SnapshotRemoteLives = 0;
+        _lastClockCenti = -1;
     }
 
     private void ClearRematchFlags()
@@ -780,9 +1054,20 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private void ConfigureRoomPersistence()
     {
-        // Seat lifetime stays at Fusion's default so a real app exit removes
-        // the player. Screen-off keeps the socket alive instead of relying on TTL.
         KeepSessionAliveInBackground();
+        try
+        {
+            var room = ResolveFusionClient(Runner)?.CurrentRoom;
+            if (room == null) return;
+            // Keep the seat through a screen-off so the other phone does not
+            // treat the pause as the player leaving the match.
+            room.PlayerTtl = 180000;
+            room.EmptyRoomTtl = 180000;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Room TTL skipped: {ex.Message}");
+        }
     }
 
     private async void RejoinActiveSession()
@@ -942,14 +1227,38 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         if (keyId == 1)
         {
             string[] parts = payload.Split('\n');
-            if (parts.Length > 0 && !string.IsNullOrWhiteSpace(parts[0]))
-                OpponentName = parts[0].Trim();
-            if (parts.Length > 1 && int.TryParse(parts[1], out int avatarIndex))
+            bool changed = false;
+            if (parts.Length > 0 && IsRealPlayerName(parts[0]))
+            {
+                string name = parts[0].Trim();
+                if (!string.Equals(OpponentName, name, StringComparison.Ordinal))
+                {
+                    OpponentName = name;
+                    changed = true;
+                }
+            }
+            if (parts.Length > 1 && int.TryParse(parts[1], out int avatarIndex) && avatarIndex >= -1 && avatarIndex < 64)
                 OpponentAvatarIndex = avatarIndex;
-            if (parts.Length > 2 && int.TryParse(parts[2], out int profileLevel))
-                OpponentProfileLevel = Mathf.Max(1, profileLevel);
+            if (parts.Length > 2 && int.TryParse(parts[2], out int profileLevel) && IsSaneProfileLevel(profileLevel))
+            {
+                // Keep the level that was announced. A later packet may record a
+                // single real level-up, and nothing else.
+                bool accept = !_opponentLevelLocked
+                    || profileLevel == OpponentProfileLevel
+                    || profileLevel == OpponentProfileLevel + 1;
+                if (accept)
+                {
+                    if (OpponentProfileLevel != profileLevel)
+                    {
+                        OpponentProfileLevel = profileLevel;
+                        changed = true;
+                    }
+                    _opponentLevelLocked = true;
+                }
+            }
 
-            OnOpponentIdentity?.Invoke();
+            if (changed)
+                OnOpponentIdentity?.Invoke();
         }
         else if (keyId == 2)
         {
@@ -960,13 +1269,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         {
             OpponentBackgrounded = payload.Trim() == "1";
         }
+        else if (keyId == 5)
+        {
+            _remoteGameplayReady = true;
+            TryArmMatchClock();
+        }
         else if (keyId == 4)
         {
             string[] parts = payload.Split('\n');
             if (parts.Length > 0 && int.TryParse(parts[0], out int centi))
             {
-                OpponentElapsedSeconds = Mathf.Max(0f, centi / 100f);
-                _opponentClockReceivedAt = Time.unscaledTime;
+                float incoming = Mathf.Max(0f, centi / 100f);
+                bool frozen = parts.Length > 3 && parts[3].Trim() == "1";
+                AdoptAuthoritativeElapsed(incoming, frozen);
             }
             if (parts.Length > 1 && int.TryParse(parts[1], out int score))
                 OpponentLiveScore = Mathf.Max(0, score);

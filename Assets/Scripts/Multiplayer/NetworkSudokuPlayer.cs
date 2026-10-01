@@ -1,3 +1,4 @@
+using System;
 using Fusion;
 using Fusion.Sockets;
 using UnityEngine;
@@ -40,49 +41,88 @@ public class NetworkSudokuPlayer : NetworkBehaviour
 
     // Live match clock, profile level, and preset avatar index for the HUD.
     // ElapsedWholeSeconds is an int so it replicates the same way score and lives do.
+    // ClockFrozen + FrozenElapsed are the final time both devices display.
     [Networked] public float ElapsedTime { get; set; }
     [Networked] public int ElapsedWholeSeconds { get; set; }
+    [Networked] public NetworkBool ClockFrozen { get; set; }
+    [Networked] public float FrozenElapsed { get; set; }
     [Networked] public NetworkBool IsBackgrounded { get; set; }
     [Networked] public int ProfileLevel { get; set; }
     [Networked] public int AvatarIndex { get; set; }
 
-    // Proxies coast the last whole-second snapshot so the HUD ticks between packets.
-    private int _seenWholeSeconds = -1;
-    private float _seenWholeAt;
+    // Fallback coast if the reliable clock channel has not delivered a sample yet.
+    private float _sampleElapsed = -1f;
+    private DateTime _sampleAtUtc;
 
-    public float VisibleElapsed
+    /// <summary>
+    /// Time both devices should show for this player.
+    /// The owner reads the shared match clock. Everyone else reads that same
+    /// clock from the network, and a frozen match never keeps extrapolating.
+    /// </summary>
+    public float DisplayElapsed
     {
         get
         {
-            if (HasStateAuthority)
+            var mp = MultiplayerManager.Instance;
+            if (mp != null && mp.HasSharedClock)
             {
-                float live = ReadLocalElapsed();
-                if (live >= 0f) return live;
+                bool mine = false;
+                try { mine = HasStateAuthority; }
+                catch { mine = false; }
+                return mine ? mp.LocalDisplayTime : mp.RemoteDisplayTime;
             }
 
-            int whole = 0;
-            float networkedFloat = 0f;
             try
             {
-                whole = ElapsedWholeSeconds;
-                networkedFloat = ElapsedTime;
+                if (ClockFrozen)
+                    return FrozenElapsed;
+                if (IsFinished)
+                    return FinishTime;
             }
             catch
             {
                 // State buffer can be unread while the object is spawning.
             }
 
-            if (whole != _seenWholeSeconds)
+            if (HasStateAuthority)
             {
-                _seenWholeSeconds = whole;
-                _seenWholeAt = Time.unscaledTime;
+                float live = ReadLocalElapsed();
+                if (live >= 0f) return live;
+
+                var game = SudokuGameManager.Instance;
+                if (game != null) return game.ElapsedSeconds;
             }
 
-            float coast = _seenWholeSeconds > 0
-                ? Mathf.Clamp(Time.unscaledTime - _seenWholeAt, 0f, 1.25f)
-                : 0f;
-            return Mathf.Max(networkedFloat, whole + coast);
+            if (!HasStateAuthority && mp != null && mp.HasOpponentClock)
+                return mp.OpponentClockFrozen ? mp.OpponentElapsedSeconds : mp.OpponentElapsedSmooth;
+
+            return ExtrapolateNetworked();
         }
+    }
+
+    public float VisibleElapsed => DisplayElapsed;
+
+    private float ExtrapolateNetworked()
+    {
+        float sample = 0f;
+        try
+        {
+            sample = Mathf.Max(ElapsedTime, ElapsedWholeSeconds);
+        }
+        catch
+        {
+            return Mathf.Max(0f, _sampleElapsed);
+        }
+
+        if (_sampleElapsed < 0f || sample > _sampleElapsed + 0.02f)
+        {
+            _sampleElapsed = sample;
+            _sampleAtUtc = DateTime.UtcNow;
+        }
+
+        if (_sampleElapsed < 0f) return 0f;
+        double extra = Math.Max(0d, (DateTime.UtcNow - _sampleAtUtc).TotalSeconds);
+        return _sampleElapsed + (float)extra;
     }
 
     // ---- Static lookup ----
@@ -104,7 +144,11 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             // Start with full hearts and zero score until the game reports otherwise
             HalfHearts = HeartManager.MaxHalfHearts;
             Score = 0;
-            ElapsedTime = 0f;
+            ClockFrozen = false;
+            FrozenElapsed = 0f;
+            float live = ReadLocalElapsed();
+            ElapsedTime = live >= 0f ? live : 0f;
+            ElapsedWholeSeconds = Mathf.FloorToInt(ElapsedTime);
 
             if (ProfileManager.Instance != null)
             {
@@ -133,9 +177,11 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     public override void FixedUpdateNetwork()
     {
         if (!HasStateAuthority) return;
+        try { if (ClockFrozen) return; }
+        catch { return; }
         float elapsed = ReadLocalElapsed();
         if (elapsed < 0f) return;
-        PublishElapsed(elapsed);
+        PublishElapsed(elapsed, false, false);
     }
 
     // ---- Called by MultiplayerGameController ----
@@ -204,7 +250,41 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     public void UpdateElapsed(float elapsed)
     {
         if (!HasStateAuthority || elapsed < 0f) return;
-        PublishElapsed(elapsed);
+        try { if (ClockFrozen) return; }
+        catch { return; }
+        PublishElapsed(elapsed, false, false);
+    }
+
+    /// <summary>Push the shared clock immediately, including after the screen turns back on.</summary>
+    public void FlushElapsed(float elapsed)
+    {
+        if (!HasStateAuthority || elapsed < 0f) return;
+        try { if (ClockFrozen) return; }
+        catch { return; }
+        PublishElapsed(elapsed, false, true);
+    }
+
+    /// <summary>
+    /// Store the final time for this player. Both devices read FrozenElapsed afterward.
+    /// </summary>
+    public void FreezeClock(float elapsed)
+    {
+        if (!HasStateAuthority || elapsed < 0f) return;
+        try
+        {
+            if (ClockFrozen) return;
+            ClockFrozen = true;
+            FrozenElapsed = elapsed;
+            ElapsedTime = elapsed;
+            ElapsedWholeSeconds = Mathf.FloorToInt(elapsed);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[NetworkSudokuPlayer] Clock freeze skipped: {ex.Message}");
+            return;
+        }
+
+        PublishElapsed(elapsed, true, true);
     }
 
     public void SetBackgrounded(bool backgrounded)
@@ -225,12 +305,16 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         var match = MultiplayerGameController.Instance;
         if (match == null || !match.IsMatchRunning) return -1f;
 
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
+            return -1f;
+
         var game = SudokuGameManager.Instance;
         if (game != null) return game.ElapsedSeconds;
         return Mathf.Max(0f, Time.time - match.MatchStartTime);
     }
 
-    private void PublishElapsed(float elapsed)
+    private void PublishElapsed(float elapsed, bool frozen, bool force)
     {
         int score = 0;
         int hearts = HeartManager.MaxHalfHearts;
@@ -241,17 +325,17 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             hearts = game.CurrentHalfHearts;
         }
 
-        MultiplayerManager.Instance?.PublishLiveStats(elapsed, score, hearts);
+        MultiplayerManager.Instance?.PublishLiveStats(elapsed, score, hearts, frozen, force);
 
         try
         {
             int whole = Mathf.FloorToInt(elapsed);
-            if (whole != ElapsedWholeSeconds)
+            if (force || frozen || whole != ElapsedWholeSeconds)
                 ElapsedWholeSeconds = whole;
-            if (elapsed > ElapsedTime)
+            if (force || frozen || elapsed > ElapsedTime)
                 ElapsedTime = elapsed;
         }
-        catch (System.Exception ex)
+        catch (Exception ex)
         {
             Debug.LogWarning($"[NetworkSudokuPlayer] Clock write skipped: {ex.Message}");
         }
@@ -263,6 +347,7 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         if (!HasStateAuthority) return;
         IsFinished = true;
         FinishTime = finishTime;
+        FreezeClock(finishTime);
     }
 
     /// <summary>Mark this player as having forfeited the match.</summary>
@@ -270,6 +355,16 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     {
         if (!HasStateAuthority) return;
         try { IsBackgrounded = false; } catch { /* flag is optional */ }
+        float elapsed = -1f;
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.ResultCaptured)
+            elapsed = mp.LocalDisplayTime;
+        else
+            elapsed = ReadLocalElapsed();
+        if (elapsed < 0f && SudokuGameManager.Instance != null)
+            elapsed = SudokuGameManager.Instance.ElapsedSeconds;
+        if (elapsed >= 0f)
+            FreezeClock(elapsed);
         HasForfeited = true;
         RpcForfeit();
     }

@@ -35,6 +35,12 @@ public class MultiplayerResultPanel : MonoBehaviour
     private bool leavingToMenu;
     private bool showing;
     private float shownLocalTime;
+    private float shownRemoteTime;
+    private int shownLocalScore;
+    private int shownRemoteScore;
+    private int shownLocalLives;
+    private int shownRemoteLives;
+    private bool statsFrozen;
 
     private void Awake()
     {
@@ -62,7 +68,7 @@ public class MultiplayerResultPanel : MonoBehaviour
     {
         gameObject.SetActive(true);
         showing = true;
-        shownLocalTime = localTime;
+        CaptureShownStats(localTime);
         if (panelRoot == null) panelRoot = gameObject;
 
         if (MultiplayerManager.Instance != null)
@@ -79,27 +85,19 @@ public class MultiplayerResultPanel : MonoBehaviour
         if (resultTitleText != null)
             resultTitleText.text = isWinner ? "YOU WIN! 🎉" : "YOU LOSE";
 
-        // Your time
+        // Your time — the value captured when this panel opened.
         if (yourTimeText != null)
-            yourTimeText.text = $"Your time: {FormatTime(localTime)}";
+            yourTimeText.text = $"Your time: {FormatTime(shownLocalTime)}";
 
         // Opponent info
-        var remote = NetworkSudokuPlayer.Remote;
-        string oppName = remote != null ? remote.PlayerName.ToString() : "Opponent";
+        var mp = MultiplayerManager.Instance;
+        string oppName = mp != null && !string.IsNullOrWhiteSpace(mp.OpponentName)
+            ? mp.OpponentName
+            : "Opponent";
         if (opponentNameText != null)
             opponentNameText.text = oppName;
 
-        if (opponentTimeText != null)
-        {
-            if (remote != null && remote.HasForfeited)
-                opponentTimeText.text = "Forfeited";
-            else if (remote != null && remote.IsFinished)
-                opponentTimeText.text = $"Time: {FormatTime(remote.FinishTime)}";
-            else
-                opponentTimeText.text = remote != null && remote.Object.IsValid
-                    ? "Still playing…"
-                    : "Disconnected";
-        }
+        RefreshTimeLines();
 
         // Animate in
         panelRoot.SetActive(true);
@@ -112,16 +110,67 @@ public class MultiplayerResultPanel : MonoBehaviour
             .Join(panelCG != null ? panelCG.DOFade(1f, animDuration) : null)
             .SetLink(panelRoot);
 
-        FillMatchStats(isWinner, localTime);
+        FillMatchStats(isWinner, shownLocalTime);
 
         // Play sound
         SoundManager.Instance?.PlaySFX(isWinner ? "Victory" : "GameOver");
     }
 
-    private void Update()
+    private void CaptureShownStats(float localTime)
     {
-        if (!showing || panelRoot == null || !panelRoot.activeInHierarchy) return;
-        FillMatchStats(false, shownLocalTime);
+        var mp = MultiplayerManager.Instance;
+        mp?.CaptureResultSnapshot();
+        if (mp != null && mp.ResultCaptured)
+        {
+            shownLocalTime = mp.LocalDisplayTime;
+            shownRemoteTime = mp.RemoteDisplayTime;
+            shownLocalScore = mp.SnapshotLocalScore;
+            shownRemoteScore = mp.SnapshotRemoteScore;
+            shownLocalLives = mp.SnapshotLocalLives;
+            shownRemoteLives = mp.SnapshotRemoteLives;
+        }
+        else
+        {
+            shownLocalTime = localTime;
+            shownRemoteTime = localTime;
+            var game = SudokuGameManager.Instance;
+            shownLocalScore = game != null ? game.SessionScore : 0;
+            shownLocalLives = game != null ? game.CurrentHalfHearts / 2 : 0;
+            shownRemoteScore = 0;
+            shownRemoteLives = 0;
+        }
+        statsFrozen = true;
+    }
+
+    private void RefreshTimeLines()
+    {
+        var local = NetworkSudokuPlayer.Local;
+        var remote = NetworkSudokuPlayer.Remote;
+
+        if (yourTimeText != null)
+            yourTimeText.text = $"Your time: {FormatTime(shownLocalTime)}";
+
+        if (opponentTimeText == null) return;
+        bool forfeited = false;
+        if (remote != null && remote.Object != null && remote.Object.IsValid)
+        {
+            try { forfeited = remote.HasForfeited; }
+            catch { forfeited = false; }
+        }
+        if (forfeited)
+        {
+            opponentTimeText.text = "Forfeited";
+            return;
+        }
+
+        if (statsFrozen)
+        {
+            opponentTimeText.text = $"Time: {FormatTime(shownRemoteTime)}";
+        }
+        else if (remote != null && remote.Object != null && remote.Object.IsValid)
+            opponentTimeText.text = "Still playing…";
+        else
+            opponentTimeText.text = "Disconnected";
     }
 
     // ---- Button handlers ----
@@ -180,19 +229,22 @@ public class MultiplayerResultPanel : MonoBehaviour
     {
         if (panelRoot == null) return;
 
-        var local = NetworkSudokuPlayer.Local;
-        var remote = NetworkSudokuPlayer.Remote;
-        int localScore = SudokuGameManager.Instance != null ? SudokuGameManager.Instance.SessionScore : (local != null ? local.Score : 0);
-        int localLives = local != null ? local.HalfHearts / 2 : (SudokuGameManager.Instance != null ? SudokuGameManager.Instance.CurrentHalfHearts / 2 : 0);
-        int remoteScore = remote != null ? remote.Score : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentLiveScore : 0);
-        float remoteTime = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentElapsedSmooth : 0f;
-        if (remote != null)
-            remoteTime = Mathf.Max(remoteTime, remote.VisibleElapsed);
-        int remoteHearts = remote != null ? remote.HalfHearts : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentLiveHalfHearts : 0);
-        int remoteLives = Mathf.Max(0, remoteHearts) / 2;
+        int localScore = shownLocalScore;
+        int localLives = shownLocalLives;
+        int remoteScore = shownRemoteScore;
+        int remoteLives = shownRemoteLives;
+        if (!statsFrozen)
+        {
+            var local = NetworkSudokuPlayer.Local;
+            var remote = NetworkSudokuPlayer.Remote;
+            localScore = SudokuGameManager.Instance != null ? SudokuGameManager.Instance.SessionScore : (local != null ? local.Score : 0);
+            localLives = local != null ? local.HalfHearts / 2 : (SudokuGameManager.Instance != null ? SudokuGameManager.Instance.CurrentHalfHearts / 2 : 0);
+            remoteScore = remote != null ? remote.Score : 0;
+            remoteLives = remote != null ? Mathf.Max(0, remote.HalfHearts) / 2 : 0;
+        }
 
-        SetStat(panelRoot.transform, "PlayerStats", localScore, localTime, localLives);
-        SetStat(panelRoot.transform, "OpponentStats", remoteScore, remoteTime, remoteLives);
+        SetStat(panelRoot.transform, "PlayerStats", localScore, shownLocalTime, localLives);
+        SetStat(panelRoot.transform, "OpponentStats", remoteScore, shownRemoteTime, remoteLives);
     }
 
     private static void SetStat(Transform root, string sideName, int score, float time, int lives)

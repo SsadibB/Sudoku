@@ -178,7 +178,34 @@ public class SudokuGameManager : MonoBehaviour
     public int SessionScore => sessionScore;
     public int CurrentHalfHearts => heartManager != null ? heartManager.CurrentHalfHearts : HeartManager.MaxHalfHearts;
     public bool IsGameActive => isGameActive;
-    public float ElapsedSeconds => isGameActive ? Mathf.Max(0f, Time.time - levelStartTime) : levelElapsedSeconds;
+    /// <summary>
+    /// Match elapsed time. Multiplayer uses a wall clock so screen-off does not stop it.
+    /// </summary>
+    public float ElapsedSeconds => isGameActive ? ReadRunningElapsed() : levelElapsedSeconds;
+
+    /// <summary>
+    /// This device's own match clock, not the shared one. Used to catch a
+    /// phone up when the other device has been running longer.
+    /// </summary>
+    public bool TryGetIndependentElapsed(out float elapsed)
+    {
+        elapsed = 0f;
+        if (!_sharedClock || _matchStartUtc.Year < 2020 || !isGameActive) return false;
+        double seconds = (DateTime.UtcNow - _matchStartUtc).TotalSeconds;
+        if (seconds < _matchClockFloor) seconds = _matchClockFloor;
+        if (seconds < 0d || seconds > 21600d) return false;
+        elapsed = (float)seconds;
+        return true;
+    }
+
+    /// <summary>Line this phone's puzzle clock up with the shared match start.</summary>
+    public void AlignMatchClock(float elapsed)
+    {
+        float safe = Mathf.Max(0f, elapsed);
+        _matchStartUtc = DateTime.UtcNow.AddSeconds(-safe);
+        _matchClockFloor = safe;
+        _sharedClock = true;
+    }
     public event System.Action<int> OnScoreChanged;
 
     private Sequence outputPanelSequence;
@@ -190,6 +217,11 @@ public class SudokuGameManager : MonoBehaviour
     private int profileScoreApplied;
     private float levelStartTime;
     private float levelElapsedSeconds;
+    // Latched when a multiplayer puzzle starts. UTC keeps moving while the
+    // screen is off, which Time.time does not.
+    private bool _sharedClock;
+    private DateTime _matchStartUtc;
+    private double _matchClockFloor;
 
     // Each keypad button's original tint, so Note Mode's color swap can be
     // reverted cleanly when it's turned off.
@@ -293,7 +325,11 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         if (loadingFill != null) loadingFill.fillAmount = 1f;
-        if (loadingPanel != null) loadingPanel.SetActive(false);
+
+        bool waitForOpponent = MultiplayerManager.Instance != null
+            && MultiplayerManager.Instance.IsInSession;
+        if (!waitForOpponent && loadingPanel != null)
+            loadingPanel.SetActive(false);
 
         int level;
         if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
@@ -309,6 +345,28 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         StartNewGame(currentDifficulty, level);
+        if (waitForOpponent)
+            yield return WaitForBothPlayersThenHideLoading();
+    }
+
+    private IEnumerator WaitForBothPlayersThenHideLoading()
+    {
+        float waited = 0f;
+        while (waited < 45f)
+        {
+            var match = MultiplayerManager.Instance;
+            if (match == null || !match.IsInSession || match.MatchClockArmed)
+                break;
+            waited += Time.unscaledDeltaTime;
+            yield return null;
+        }
+
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
+            mp.ArmMatchClockNow();
+
+        if (loadingPanel != null)
+            loadingPanel.SetActive(false);
     }
 
     private void BindGameplayHud()
@@ -508,7 +566,7 @@ public class SudokuGameManager : MonoBehaviour
         if (!isGameActive) return;
 
         if (hudTimeText != null)
-            hudTimeText.text = FormatElapsedTime(Time.time - levelStartTime);
+            hudTimeText.text = FormatElapsedTime(ElapsedSeconds);
 
         Keyboard keyboard = Keyboard.current;
         if (keyboard == null) return; // no keyboard device connected (e.g. mobile)
@@ -683,6 +741,9 @@ public class SudokuGameManager : MonoBehaviour
         profileScoreApplied = 0;
         levelStartTime = Time.time;
         levelElapsedSeconds = 0f;
+        _matchStartUtc = DateTime.UtcNow;
+        _matchClockFloor = 0d;
+        _sharedClock = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
 
         // Reset hint pack counter in Mode B
         if (useHintPackSystem)
@@ -732,6 +793,8 @@ public class SudokuGameManager : MonoBehaviour
 
         isGameActive = true;
         GameplayReady = true;
+        if (_sharedClock)
+            MultiplayerManager.Instance?.NotifyLocalGameplayReady();
 
         SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(difficulty));
         StartRandomSfxLoop();
@@ -1200,8 +1263,8 @@ public class SudokuGameManager : MonoBehaviour
         }
 
         // Victory!
+        levelElapsedSeconds = ElapsedSeconds;
         isGameActive = false;
-        levelElapsedSeconds = Time.time - levelStartTime;
 
         // Board-complete points raise the profile level through UpdateScoreHud.
         sessionScore += scorePerBoardComplete;
@@ -1228,8 +1291,8 @@ public class SudokuGameManager : MonoBehaviour
         // OnGameOver event, if something else is also subscribed to it.
         if (!isGameActive) return;
 
+        levelElapsedSeconds = ElapsedSeconds;
         isGameActive = false;
-        levelElapsedSeconds = Time.time - levelStartTime;
         StopRandomSfxLoop();
 
         bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
@@ -1281,6 +1344,8 @@ public class SudokuGameManager : MonoBehaviour
         if (heartManager != null) heartManager.RestoreOneLife();
         isGameActive = true;
         levelStartTime = Time.time - levelElapsedSeconds;
+        _matchStartUtc = DateTime.UtcNow.AddSeconds(-levelElapsedSeconds);
+        _matchClockFloor = levelElapsedSeconds;
         SoundManager.Instance?.PlayMusic(UIManager.GetDifficultyMusicId(currentDifficulty));
         StartRandomSfxLoop();
     }
@@ -1657,23 +1722,33 @@ public class SudokuGameManager : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX("Button");
 
-        // In multiplayer: immediately forfeit without confirmation dialog
-        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession)
-        {
-            ExecuteBackToMenu();
-            return;
-        }
-
         if (restartConfirmationPanel != null)
         {
             pendingConfirmationAction = ConfirmationAction.BackToMenu;
-            SetConfirmationMessage("You want to go back to menu?");
+            bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsInSession;
+            SetConfirmationMessage(multiplayer ? "Exit the match?" : "You want to go back to menu?");
             restartConfirmationPanel.SetActive(true);
+            return;
         }
+
+        ExecuteBackToMenu();
+    }
+
+    private float ReadRunningElapsed()
+    {
+        var match = MultiplayerManager.Instance;
+        if (_sharedClock && match != null && match.HasSharedClock)
+            return match.SharedElapsed;
+
+        if (!_sharedClock)
+            return Mathf.Max(0f, Time.time - levelStartTime);
+
+        double elapsed = (DateTime.UtcNow - _matchStartUtc).TotalSeconds;
+        if (elapsed < _matchClockFloor)
+            elapsed = _matchClockFloor;
         else
-        {
-            ExecuteBackToMenu();
-        }
+            _matchClockFloor = elapsed;
+        return (float)Math.Max(0d, elapsed);
     }
 
     /// <summary>
@@ -1681,6 +1756,8 @@ public class SudokuGameManager : MonoBehaviour
     /// </summary>
     public void EndGameForMultiplayer()
     {
+        if (isGameActive)
+            levelElapsedSeconds = ElapsedSeconds;
         isGameActive = false;
         StopRandomSfxLoop();
         if (gridLayout != null)

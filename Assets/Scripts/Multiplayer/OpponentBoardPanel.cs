@@ -271,9 +271,9 @@ public class OpponentBoardPanel : MonoBehaviour
     {
         EnsureOpponentHeader();
 
-        int level = remote != null && remote.ProfileLevel > 0
-            ? remote.ProfileLevel
-            : (MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentProfileLevel : 1);
+        int level = MultiplayerManager.Instance != null
+            ? MultiplayerManager.Instance.OpponentProfileLevel
+            : 1;
 
         if (opponentLevelText != null)
             opponentLevelText.text = $"Level {Mathf.Max(1, level):00}";
@@ -397,8 +397,12 @@ public class OpponentBoardPanel : MonoBehaviour
         {
             if (opponentNameText != null)
             {
-                string pName = remote.PlayerName.ToString();
-                opponentNameText.text = string.IsNullOrEmpty(pName) ? "Opponent" : pName;
+                string pName = MultiplayerManager.Instance != null
+                    ? MultiplayerManager.Instance.OpponentName
+                    : null;
+                if (string.IsNullOrWhiteSpace(pName))
+                    pName = remote.PlayerName.ToString();
+                opponentNameText.text = string.IsNullOrWhiteSpace(pName) ? "Opponent" : pName;
                 opponentNameText.color = headerNameColor;
             }
 
