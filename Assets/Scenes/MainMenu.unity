@@ -3287,7 +3287,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 0
+  m_IsActive: 1
 --- !u!224 &239359991
 RectTransform:
   m_ObjectHideFlags: 0
@@ -10320,7 +10320,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 123.165245, y: -116.741}
+  m_AnchoredPosition: {x: 123.16525, y: -116.741}
   m_SizeDelta: {x: 246.33049, y: 233.482}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!1 &972704208
@@ -21450,6 +21450,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 1fa24a92fdacc5442a02e674e9ec1fc2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: Assembly-CSharp::MultiplayerManager
+  playerPrefab: {fileID: 3684215293905749020, guid: 4c237a6d8e82bc042bbbc9d294017267, type: 3}
 --- !u!4 &1999884298
 Transform:
   m_ObjectHideFlags: 0

@@ -784,27 +784,28 @@ public class UIManager : MonoBehaviour
     private void OnMultiPlayerClicked()
     {
         PlayButtonSfx();
-        ButtonSelectionVisual.Apply(multiPlayerButton, singlePlayerButton, multiPlayerButton);
+        difficultyPanelSequence?.Kill();
+        playButtonPulseTween?.Kill();
+
+        if (difficultyPanel != null)
+            difficultyPanel.SetActive(false);
+        if (mainMenuPanel != null)
+            mainMenuPanel.SetActive(false);
 
         if (settingsButton != null) settingsButton.gameObject.SetActive(false);
         if (aboutButton != null) aboutButton.gameObject.SetActive(false);
         if (playButton != null) playButton.gameObject.SetActive(false);
         if (profileIconButton != null) profileIconButton.gameObject.SetActive(false);
 
-        HideDifficultyPanel(() =>
-        {
-            if (mainMenuPanel != null) mainMenuPanel.SetActive(false);
+        if (multiplayerLobbyUI == null)
+            multiplayerLobbyUI = MultiplayerLobbyUI.Instance;
+        if (multiplayerLobbyUI == null)
+            multiplayerLobbyUI = FindAnyObjectByType<MultiplayerLobbyUI>(FindObjectsInactive.Include);
 
-            if (multiplayerLobbyUI == null)
-                multiplayerLobbyUI = MultiplayerLobbyUI.Instance;
-            if (multiplayerLobbyUI == null)
-                multiplayerLobbyUI = FindAnyObjectByType<MultiplayerLobbyUI>(FindObjectsInactive.Include);
-
-            if (multiplayerLobbyUI != null)
-                multiplayerLobbyUI.Show();
-            else
-                Debug.LogError("[UIManager] MultiplayerLobbyUI could not be found!");
-        });
+        if (multiplayerLobbyUI != null)
+            multiplayerLobbyUI.Show();
+        else
+            Debug.LogError("[UIManager] MultiplayerLobbyUI could not be found!");
     }
 
     /// <summary>

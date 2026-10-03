@@ -12,7 +12,7 @@ public class NetworkPlayerSpawner : SimulationBehaviour, IPlayerJoined
     public void PlayerJoined(PlayerRef player)
     {
         // Only spawn for the local player
-        if (player == Runner.LocalPlayer)
+        if (player == Runner.LocalPlayer && NetworkSudokuPlayer.Local == null)
         {
             Runner.Spawn(networkPlayerPrefab, Vector3.zero, Quaternion.identity, player);
         }

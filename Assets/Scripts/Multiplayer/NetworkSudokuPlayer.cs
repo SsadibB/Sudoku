@@ -49,6 +49,9 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     [Networked] public NetworkBool IsBackgrounded { get; set; }
     [Networked] public int ProfileLevel { get; set; }
     [Networked] public int AvatarIndex { get; set; }
+    [Networked] public int AvatarByteCount { get; set; }
+    [Networked, Capacity(1024)] public NetworkArray<byte> AvatarJpeg { get; }
+    [Networked] public int MatchEpoch { get; set; }
     [Networked] public NetworkBool WantsRematch { get; set; }
 
     // Fallback coast if the reliable clock channel has not delivered a sample yet.
@@ -158,8 +161,12 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             if (ProfileManager.Instance != null)
             {
                 ProfileLevel = ProfileManager.Instance.ProfileLevel;
-                AvatarIndex = ProfileManager.Instance.AvatarPresetIndex;
+                AvatarIndex = string.IsNullOrEmpty(ProfileManager.Instance.AvatarUrl)
+                    ? ProfileManager.Instance.AvatarPresetIndex
+                    : -1;
             }
+
+            MultiplayerManager.Instance?.PublishCachedAvatar();
 
             // If Master Client, publish the match level
             if (Runner.IsSharedModeMasterClient && MultiplayerManager.Instance != null)
@@ -193,6 +200,9 @@ public class NetworkSudokuPlayer : NetworkBehaviour
             ElapsedWholeSeconds = 0;
             IsBackgrounded = false;
             CompletedCells = 0;
+            MatchEpoch = MultiplayerManager.Instance != null
+                ? MultiplayerManager.Instance.CurrentMatchEpoch
+                : MatchEpoch;
             for (int i = 0; i < 81; i++)
                 BoardSnapshot.Set(i, 0);
 
@@ -202,6 +212,24 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         catch (Exception ex)
         {
             Debug.LogWarning($"[NetworkSudokuPlayer] Rematch reset skipped: {ex.Message}");
+        }
+    }
+
+    public void PublishAvatarJpeg(byte[] jpg)
+    {
+        if (jpg == null || jpg.Length < 32) return;
+        if (Object == null || !Object.IsValid || !HasStateAuthority) return;
+
+        try
+        {
+            int count = Mathf.Min(jpg.Length, AvatarJpeg.Length);
+            for (int i = 0; i < count; i++)
+                AvatarJpeg.Set(i, jpg[i]);
+            AvatarByteCount = count;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[NetworkSudokuPlayer] Avatar publish skipped: " + ex.Message);
         }
     }
 
@@ -421,13 +449,17 @@ public class NetworkSudokuPlayer : NetworkBehaviour
         if (elapsed >= 0f)
             FreezeClock(elapsed);
         HasForfeited = true;
+        MultiplayerManager.Instance?.AnnounceLocalExit();
         RpcForfeit();
     }
 
     [Rpc(RpcSources.StateAuthority, RpcTargets.All)]
     public void RpcForfeit()
     {
-        HasForfeited = true;
+        // Only the owner can write networked state. Everyone else still
+        // needs the event, or the exit never reaches the other phone.
+        if (HasStateAuthority)
+            HasForfeited = true;
         OnPlayerForfeited?.Invoke(this);
     }
 }

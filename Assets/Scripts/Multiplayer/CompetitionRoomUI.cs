@@ -562,7 +562,13 @@ public class CompetitionRoomUI : MonoBehaviour
             return;
         }
 
-        if (hostStatusText != null) hostStatusText.text = "Opponent Found";
+        if (hostStatusText != null)
+        {
+            string opponentName = MultiplayerManager.Instance != null
+                ? MultiplayerManager.Instance.OpponentName
+                : null;
+            hostStatusText.text = ProfileManager.SearchingForLine(opponentName);
+        }
         ShowHostWaitOpponent();
         SetHostStartEnabled(true);
     }
@@ -572,6 +578,8 @@ public class CompetitionRoomUI : MonoBehaviour
         if (!hostSelected || !hostSlotVisible) return;
         ShowHostWaitLocal();
         ShowHostWaitOpponent();
+        if (hostStatusText != null && MultiplayerManager.Instance != null)
+            hostStatusText.text = ProfileManager.SearchingForLine(MultiplayerManager.Instance.OpponentName);
     }
 
     private void RefreshHostIdentity()

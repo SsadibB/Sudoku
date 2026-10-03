@@ -501,20 +501,137 @@ public class ProfileManager : MonoBehaviour
         }
     }
 
+    public static string ShortDisplayName(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        name = name.Trim().Replace('_', ' ');
+        name = SeparateHonorific(name);
+        if (IsGenericPlayerLabel(name)) return "";
+
+        string[] parts = name.Split(new[] { ' ' }, System.StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 0; i < parts.Length; i++)
+        {
+            string token = StripLeadingHonorific(parts[i].Trim().Trim(',', ';', ':'));
+            token = token.Trim().Trim('.', ',', ';', ':');
+            if (token.Length == 0 || IsHonorific(token) || token.Length == 1)
+                continue;
+
+            string meaningful = StripTrailingNumber(token);
+            if (meaningful.Length >= 2 && HasLetter(meaningful) && !IsGenericPlayerLabel(meaningful))
+                return meaningful;
+        }
+
+        return "";
+    }
+
+    // "Md.Samirul" has no space, so the title has to be split off before the words are read.
+    private static string SeparateHonorific(string name)
+    {
+        System.Text.StringBuilder builder = new System.Text.StringBuilder(name.Length + 4);
+        for (int i = 0; i < name.Length; i++)
+        {
+            builder.Append(name[i]);
+            if (name[i] == '.' && i + 1 < name.Length && char.IsLetter(name[i + 1]))
+                builder.Append(' ');
+        }
+        return builder.ToString();
+    }
+
+    private static string StripLeadingHonorific(string token)
+    {
+        int dot = token.IndexOf('.');
+        if (dot <= 0 || dot >= token.Length - 1)
+            return token;
+
+        string head = token.Substring(0, dot);
+        string rest = token.Substring(dot + 1).Trim();
+        if (!IsHonorific(head) || rest.Length < 2 || !HasLetter(rest))
+            return token;
+
+        return StripLeadingHonorific(rest);
+    }
+
+    private static bool IsGenericPlayerLabel(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return true;
+        name = name.Trim();
+        return name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)
+            || name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)
+            || name.Equals("You", System.StringComparison.OrdinalIgnoreCase)
+            || name.StartsWith("Player_", System.StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static bool IsHonorific(string token)
+    {
+        string value = token.Trim().TrimEnd('.').ToLowerInvariant();
+        switch (value)
+        {
+            case "md":
+            case "dr":
+            case "mr":
+            case "mrs":
+            case "ms":
+            case "miss":
+            case "prof":
+            case "sir":
+            case "eng":
+            case "er":
+            case "adv":
+            case "jr":
+            case "sr":
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    private static string StripTrailingNumber(string token)
+    {
+        int dash = token.LastIndexOf('-');
+        if (dash <= 0) return token;
+        string tail = token.Substring(dash + 1);
+        if (tail.Length == 0) return token;
+        for (int i = 0; i < tail.Length; i++)
+        {
+            if (!char.IsDigit(tail[i]))
+                return token;
+        }
+        return token.Substring(0, dash);
+    }
+
+    private static bool HasLetter(string value)
+    {
+        for (int i = 0; i < value.Length; i++)
+        {
+            if (char.IsLetter(value[i]))
+                return true;
+        }
+        return false;
+    }
+
+    public static string SearchingForLine(string name)
+    {
+        string shown = ShortDisplayName(name);
+        if (string.IsNullOrEmpty(shown)) return "Searching...";
+        return "Searching for " + shown + "...";
+    }
+
     // Short names stay at the designed size. Longer names shrink until the
     // whole string fits inside the label rect.
-    private static void FitNameLabel(TMP_Text label)
+    public static void FitNameLabel(TMP_Text label)
     {
         if (label == null) return;
 
+        label.alignment = TextAlignmentOptions.Center;
         label.textWrappingMode = TextWrappingModes.NoWrap;
-        label.overflowMode = TextOverflowModes.Overflow;
+        label.overflowMode = TextOverflowModes.Truncate;
         float designed = label.enableAutoSizing && label.fontSizeMax > 1f
             ? label.fontSizeMax
             : (label.fontSize > 1f ? label.fontSize : 36f);
         label.enableAutoSizing = true;
         label.fontSizeMax = designed;
-        label.fontSizeMin = Mathf.Clamp(designed * 0.35f, 10f, designed);
+        label.fontSizeMin = Mathf.Clamp(designed * 0.22f, 8f, designed);
+        label.ForceMeshUpdate();
     }
 
     private void ClosePanel()
@@ -993,6 +1110,16 @@ public class ProfileManager : MonoBehaviour
 
     private void LoadSavedProfilePicture()
     {
+        string accountUrl = PlayerPrefs.GetString(AccountPhotoUrlKey, "");
+        if (!string.IsNullOrWhiteSpace(accountUrl))
+        {
+            AvatarUrl = accountUrl.Trim();
+            if (accountAvatarRoutine != null)
+                StopCoroutine(accountAvatarRoutine);
+            accountAvatarRoutine = StartCoroutine(DownloadAccountAvatar(AvatarUrl));
+            return;
+        }
+
         string mode = PlayerPrefs.GetString(PREF_MODE, "");
 
         if (mode == "custom" && File.Exists(CustomImagePath))
@@ -1432,13 +1559,15 @@ public class ProfileManager : MonoBehaviour
         return label;
     }
 
+    private static Sprite builtinFillSprite;
+
     private static Sprite BuiltinUiSprite()
     {
-        Sprite builtin = Resources.GetBuiltinResource<Sprite>("UI/Skin/UISprite.psd");
-        if (builtin != null) return builtin;
+        if (builtinFillSprite != null) return builtinFillSprite;
 
         Texture2D tex = Texture2D.whiteTexture;
-        return Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f));
+        builtinFillSprite = Sprite.Create(tex, new Rect(0f, 0f, tex.width, tex.height), new Vector2(0.5f, 0.5f), 100f);
+        return builtinFillSprite;
     }
 
     private static RectTransform CreateUiRect(string name, Transform parent, Vector2 anchoredPosition, Vector2 size)

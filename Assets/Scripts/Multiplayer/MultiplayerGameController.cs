@@ -156,6 +156,12 @@ public class MultiplayerGameController : MonoBehaviour
 
     private void Update()
     {
+        if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.OpponentForfeited)
+        {
+            ConcludeOpponentGone();
+            return;
+        }
+
         if (!gameStarted) return;
         if (_matchInitDone)
             EnsureLocalPlayer();
@@ -737,8 +743,9 @@ public class MultiplayerGameController : MonoBehaviour
         var mp = MultiplayerManager.Instance;
 
         string localName = mp != null && IsRealHudName(mp.LocalPlayerName)
-            ? mp.LocalPlayerName
+            ? ProfileManager.ShortDisplayName(mp.LocalPlayerName)
             : ReadNetworkName(local, "You");
+        if (string.IsNullOrEmpty(localName)) localName = "You";
         int localLevel = ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1;
         bool frozen = mp != null && mp.ResultCaptured;
         int localLives = frozen
@@ -758,14 +765,15 @@ public class MultiplayerGameController : MonoBehaviour
         Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
 
         if (playerSide != null)
-            ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar);
+            ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar, false);
 
         string networkName = ReadNetworkName(remote, null);
         if (mp != null)
             mp.RememberOpponent(networkName, 0);
-        string remoteName = mp != null && IsRealHudName(mp.OpponentName)
+        string remoteSource = mp != null && IsRealHudName(mp.OpponentName)
             ? mp.OpponentName
-            : (networkName ?? "Opponent");
+            : networkName;
+        string remoteName = ProfileManager.ShortDisplayName(remoteSource);
         int remoteLevel = mp != null ? mp.OpponentProfileLevel : 1;
         int remoteScore = frozen
             ? mp.SnapshotRemoteScore
@@ -778,14 +786,14 @@ public class MultiplayerGameController : MonoBehaviour
         int remoteLives = frozen
             ? mp.SnapshotRemoteLives
             : Mathf.Max(0, remote != null ? remote.HalfHearts : (mp != null ? mp.OpponentLiveHalfHearts : 0)) / 2;
-        Sprite remoteAvatar = null;
-        if (remote != null && ProfileManager.Instance != null)
+        Sprite remoteAvatar = mp != null ? mp.GetOpponentAvatar() : null;
+        if (remoteAvatar == null && remote != null && ProfileManager.Instance != null
+            && string.IsNullOrEmpty(mp != null ? mp.OpponentAvatarUrl : null)
+            && remote.AvatarIndex >= 0)
             remoteAvatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
-        if (remoteAvatar == null && mp != null)
-            remoteAvatar = mp.GetOpponentAvatar();
 
         if (opponentSide != null)
-            ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar);
+            ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar, true);
 
         for (int i = 0; i < outputOpponentStats.Count; i++)
             ApplyOutputOpponent(outputOpponentStats[i], remoteScore, remoteTime, remoteLives);
@@ -833,7 +841,7 @@ public class MultiplayerGameController : MonoBehaviour
         valueText.text = value;
     }
 
-    private static void ApplySide(Transform side, string playerName, int level, int score, float time, int lives, Sprite avatar)
+    private static void ApplySide(Transform side, string playerName, int level, int score, float time, int lives, Sprite avatar, bool opponentSlot)
     {
         if (side == null) return;
 
@@ -842,30 +850,63 @@ public class MultiplayerGameController : MonoBehaviour
         TMP_Text scoreText = FindText(side, "ScoreValue_Text (TMP)");
         TMP_Text timeText = FindText(side, "TimeValue_Text (TMP)");
 
-        if (nameText != null) nameText.text = playerName;
-        if (levelText != null) levelText.text = $"Level {Mathf.Max(1, level):00}";
-        if (scoreText != null) scoreText.text = score.ToString();
-        if (timeText != null) timeText.text = FormatClock(time);
-
-        Transform avatarImage = FindChild(side, "Avatar");
-        if (avatarImage != null && avatar != null)
+        if (nameText != null)
         {
-            var image = avatarImage.GetComponent<Image>();
-            if (image != null) image.sprite = avatar;
+            nameText.text = string.IsNullOrEmpty(playerName) ? "" : playerName;
+            ProfileManager.FitNameLabel(nameText);
         }
+        if (levelText != null)
+            levelText.text = $"Level {Mathf.Max(1, level):00}";
+        if (scoreText != null)
+            scoreText.text = score.ToString();
+        if (timeText != null)
+            timeText.text = FormatClock(time);
+
+        ApplyCircularAvatar(side, avatar, opponentSlot);
 
         Transform livesRoot = FindChild(side, "Lives");
         if (livesRoot == null) return;
-        int shown = Mathf.Clamp(lives, 0, livesRoot.childCount);
+        int shownLives = Mathf.Clamp(lives, 0, livesRoot.childCount);
         for (int i = 0; i < livesRoot.childCount; i++)
         {
             Transform slot = livesRoot.GetChild(i);
             Transform life = slot.Find("Life");
             Transform lifeless = slot.Find("Lifeless");
-            bool alive = i < shown;
+            bool alive = i < shownLives;
             if (life != null) life.gameObject.SetActive(alive);
             if (lifeless != null) lifeless.gameObject.SetActive(!alive);
         }
+    }
+
+    private static void ApplyCircularAvatar(Transform side, Sprite avatar, bool hideUntilReady)
+    {
+        Transform avatarRoot = FindChild(side, "Avatar");
+        if (avatarRoot == null) return;
+
+        Image image = avatarRoot.GetComponent<Image>();
+        if (image == null)
+            image = avatarRoot.GetComponentInChildren<Image>(true);
+        image = ProfileManager.ApplyCircularMask(image);
+        if (image == null) return;
+
+        image.gameObject.SetActive(true);
+        if (image.transform.parent != null)
+            image.transform.parent.gameObject.SetActive(true);
+
+        if (avatar != null)
+        {
+            image.sprite = avatar;
+            image.color = Color.white;
+            image.enabled = true;
+            image.preserveAspect = false;
+            return;
+        }
+
+        if (!hideUntilReady) return;
+
+        image.sprite = null;
+        image.color = new Color(1f, 1f, 1f, 0f);
+        image.enabled = true;
     }
 
     private static bool IsRealHudName(string name)

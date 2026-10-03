@@ -281,12 +281,23 @@ public class OpponentBoardPanel : MonoBehaviour
         if (opponentAvatarImage == null) return;
 
         Sprite avatar = null;
-        if (remote != null && ProfileManager.Instance != null)
+        var mp = MultiplayerManager.Instance;
+        bool accountPhoto = mp != null && (!string.IsNullOrEmpty(mp.OpponentAvatarUrl) || mp.OpponentAvatarSprite != null);
+        if (accountPhoto)
+            avatar = mp.GetOpponentAvatar();
+        else if (remote != null && ProfileManager.Instance != null)
             avatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
-        if (avatar == null && MultiplayerManager.Instance != null)
-            avatar = MultiplayerManager.Instance.GetOpponentAvatar();
-        if (avatar != null)
+        if (avatar == null && mp != null)
+            avatar = mp.GetOpponentAvatar();
+
+        opponentAvatarImage = ProfileManager.ApplyCircularMask(opponentAvatarImage);
+        if (opponentAvatarImage != null && avatar != null)
+        {
             opponentAvatarImage.sprite = avatar;
+            opponentAvatarImage.color = Color.white;
+            opponentAvatarImage.enabled = true;
+            opponentAvatarImage.preserveAspect = false;
+        }
     }
 
     private void EnsureOpponentHeader()
@@ -402,7 +413,9 @@ public class OpponentBoardPanel : MonoBehaviour
                     : null;
                 if (string.IsNullOrWhiteSpace(pName))
                     pName = remote.PlayerName.ToString();
-                opponentNameText.text = string.IsNullOrWhiteSpace(pName) ? "Opponent" : pName;
+                pName = ProfileManager.ShortDisplayName(pName);
+                opponentNameText.text = pName ?? "";
+                ProfileManager.FitNameLabel(opponentNameText);
                 opponentNameText.color = headerNameColor;
             }
 

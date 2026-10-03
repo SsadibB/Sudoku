@@ -120,6 +120,7 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         if (lobbyPanel == null) return;
         lobbyPanel.SetActive(true);
+        lobbyPanel.transform.SetAsLastSibling();
 
         RectTransform rt = lobbyPanel.GetComponent<RectTransform>();
         if (rt != null)
@@ -216,6 +217,8 @@ public class MultiplayerLobbyUI : MonoBehaviour
         bool already = opponentFound;
         opponentFound = true;
         SetGroupActive(searchingGroup, true);
+        if (searchingStatusText != null && searchContext != SearchContext.Rematch)
+            searchingStatusText.text = "Opponent Found";
         ApplyFoundPlayers();
 
         bool hostMayStart = false;
@@ -258,11 +261,24 @@ public class MultiplayerLobbyUI : MonoBehaviour
             return;
         }
 
-        if (!opponentFound || searchContext != SearchContext.International) return;
+        if (searchContext != SearchContext.International && searchContext != SearchContext.Rematch)
+            return;
         if (searchingGroup == null || !searchingGroup.activeInHierarchy) return;
+
+        var remote = NetworkSudokuPlayer.Remote;
+        bool remoteReady = remote != null && remote.Object != null && remote.Object.IsValid;
+        var mp = MultiplayerManager.Instance;
+        bool named = mp != null && !string.IsNullOrWhiteSpace(mp.OpponentName);
+        if (!opponentFound && !remoteReady && !named) return;
+
+        if (searchVisuals == null)
+            searchVisuals = PlayerSearchVisuals.Bind(searchingGroup.transform);
         if (searchingStatusText == null) EnsureReferences();
-        if (searchingStatusText != null && searchingStatusText.text != "Opponent Found!")
-            searchingStatusText.text = "Opponent Found!";
+
+        if (!opponentFound)
+            PresentOpponentFound();
+        else
+            ApplyFoundPlayers();
     }
 
     private void OnInternationalClicked()
@@ -420,26 +436,77 @@ public class MultiplayerLobbyUI : MonoBehaviour
 
         var mp = MultiplayerManager.Instance;
         string opponentName = mp != null ? mp.OpponentName : null;
+        if (!IsDisplayName(opponentName))
+        {
+            var remote = NetworkSudokuPlayer.Remote;
+            if (remote != null && remote.Object != null && remote.Object.IsValid)
+            {
+                try
+                {
+                    string networked = remote.PlayerName.ToString();
+                    if (IsDisplayName(networked))
+                        opponentName = networked;
+                }
+                catch { }
+            }
+        }
         if (!IsDisplayName(opponentName) && mp != null)
             opponentName = mp.RematchOpponentName;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
         if (opponentAvatar == null && mp != null && mp.RematchOpponentAvatar >= 0 && ProfileManager.Instance != null)
             opponentAvatar = ProfileManager.Instance.GetPresetAvatar(mp.RematchOpponentAvatar);
         searchVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
+        AttachOpponentProfile(opponentName, opponentAvatar);
 
         if (searchingStatusText != null)
+            searchingStatusText.text = "Opponent Found";
+    }
+
+    // Writes the found opponent straight onto the searching card:
+    // the avatar image and OpponentName_Text.
+    private void AttachOpponentProfile(string fullName, Sprite avatar)
+    {
+        if (searchingGroup == null) return;
+        Transform opponent = FindDeep(searchingGroup.transform, "Opponent");
+        if (opponent == null) return;
+
+        string shown = ProfileManager.ShortDisplayName(fullName);
+        if (!string.IsNullOrEmpty(shown))
         {
-            bool waitingForHost = searchContext == SearchContext.Competition && !IsLocalHost();
-            searchingStatusText.text = waitingForHost
-                ? "Waiting for host to start..."
-                : "Opponent Found!";
+            TMP_Text[] texts = opponent.GetComponentsInChildren<TMP_Text>(true);
+            for (int i = 0; i < texts.Length; i++)
+            {
+                if (texts[i] == null) continue;
+                if (!texts[i].gameObject.name.StartsWith("OpponentName_Text", System.StringComparison.Ordinal))
+                    continue;
+                texts[i].text = shown;
+                texts[i].gameObject.SetActive(true);
+                ProfileManager.FitNameLabel(texts[i]);
+            }
         }
+
+        if (avatar == null) return;
+        Transform avatarObject = FindDeep(opponent, "AvatarImage");
+        if (avatarObject == null) return;
+        Image image = avatarObject.GetComponent<Image>();
+        if (image == null) return;
+        image = ProfileManager.ApplyCircularMask(image);
+        if (image == null) return;
+        image.sprite = avatar;
+        image.color = Color.white;
+        image.enabled = true;
+        image.preserveAspect = false;
+        image.gameObject.SetActive(true);
+        if (image.transform.parent != null)
+            image.transform.parent.gameObject.SetActive(true);
     }
 
     private void ShowLocalPlayer()
     {
         var mp = MultiplayerManager.Instance;
         string localName = mp != null ? mp.LocalPlayerName : "You";
+        localName = ProfileManager.ShortDisplayName(localName);
+        if (string.IsNullOrEmpty(localName)) localName = "You";
         Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
         searchVisuals?.ShowLocal(localName, localAvatar);
     }
@@ -698,13 +765,17 @@ public class PlayerSearchVisuals
     public void ShowLocal(string playerName, Sprite avatar)
     {
         if (LocalNameText != null && !string.IsNullOrEmpty(playerName))
-            LocalNameText.text = playerName;
+        {
+            LocalNameText.text = ProfileManager.ShortDisplayName(playerName);
+            ProfileManager.FitNameLabel(LocalNameText);
+        }
         LocalAvatar = ProfileManager.ApplyCircularMask(LocalAvatar);
         if (LocalAvatar != null && avatar != null)
         {
             LocalAvatar.sprite = avatar;
             LocalAvatar.color = Color.white;
             LocalAvatar.enabled = true;
+            LocalAvatar.preserveAspect = false;
             LocalAvatar.gameObject.SetActive(true);
         }
     }
@@ -738,21 +809,25 @@ public class PlayerSearchVisuals
 
         if (SearchText != null && IsShownPlayerName(opponentName))
         {
-            SearchText.text = opponentName.Trim();
-            SearchText.gameObject.SetActive(true);
-            HideGenericOpponentCaption(SearchText.transform);
+            string shown = ProfileManager.ShortDisplayName(opponentName);
+            if (!string.IsNullOrEmpty(shown))
+            {
+                SearchText.text = shown;
+                ProfileManager.FitNameLabel(SearchText);
+                SearchText.gameObject.SetActive(true);
+            }
         }
-        else if (writeNameLabel && SearchText != null)
-            SearchText.text = "Searching...";
 
         AvatarImage = ProfileManager.ApplyCircularMask(AvatarImage);
-        if (AvatarImage != null && avatar != null)
-        {
-            AvatarImage.sprite = avatar;
-            AvatarImage.enabled = true;
-            AvatarImage.gameObject.SetActive(true);
-            AvatarImage.color = Color.white;
-        }
+        if (AvatarImage == null || avatar == null) return;
+
+        AvatarImage.gameObject.SetActive(true);
+        if (AvatarImage.transform.parent != null)
+            AvatarImage.transform.parent.gameObject.SetActive(true);
+        AvatarImage.sprite = avatar;
+        AvatarImage.enabled = true;
+        AvatarImage.preserveAspect = false;
+        AvatarImage.color = Color.white;
     }
 
     // Name label on a player card. Prefer the text that sits with the avatar
