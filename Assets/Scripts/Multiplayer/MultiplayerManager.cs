@@ -114,6 +114,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private int seenAvatarChecksum;
     private int opponentAvatarPixels;
     private bool opponentAvatarIsOriginal;
+    private Texture2D opponentAvatarTexture;
+    private byte[] opponentAvatarPayload;
     private bool _exitAnnounced;
     public int CurrentMatchEpoch { get; private set; }
     public bool OpponentForfeited { get; private set; }
@@ -1287,13 +1289,15 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         int pixels = texture.width * texture.height;
-        if (opponentAvatarIsOriginal || (!replace && OpponentAvatarSprite != null && pixels <= opponentAvatarPixels))
+        bool haveSprite = OpponentAvatarSprite != null;
+        if (haveSprite && (opponentAvatarIsOriginal || (!replace && pixels <= opponentAvatarPixels)))
         {
             Destroy(texture);
             return false;
         }
 
-        OpponentAvatarSprite = CreateSharpAvatarSprite(texture);
+        opponentAvatarPayload = jpg;
+        RememberOpponentAvatar(texture, false);
         OnOpponentIdentity?.Invoke();
         return true;
     }
@@ -1303,12 +1307,46 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         texture.filterMode = FilterMode.Bilinear;
         texture.anisoLevel = 4;
         texture.wrapMode = TextureWrapMode.Clamp;
+        texture.hideFlags = HideFlags.DontUnloadUnusedAsset;
         opponentAvatarPixels = texture.width * texture.height;
-        return Sprite.Create(
+        Sprite sprite = Sprite.Create(
             texture,
             new Rect(0, 0, texture.width, texture.height),
             new Vector2(0.5f, 0.5f),
             100f);
+        sprite.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        return sprite;
+    }
+
+    // The photo has to stay on this DontDestroyOnLoad object. A texture owned by a
+    // web request, or only referenced by the searching-panel image, is destroyed
+    // when that scene unloads and the gameplay portrait goes blank.
+    private void RememberOpponentAvatar(Texture2D texture, bool markOriginal)
+    {
+        if (texture == null) return;
+        if (opponentAvatarTexture != null && opponentAvatarTexture != texture)
+            Destroy(opponentAvatarTexture);
+        opponentAvatarTexture = texture;
+        OpponentAvatarSprite = CreateSharpAvatarSprite(texture);
+        if (markOriginal)
+            opponentAvatarIsOriginal = true;
+    }
+
+    private static Texture2D CopyReadableTexture(Texture2D source)
+    {
+        if (source == null) return null;
+        try
+        {
+            Texture2D copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+            copy.SetPixels(source.GetPixels());
+            copy.Apply(false, false);
+            return copy;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[MultiplayerManager] Opponent photo copy skipped: " + ex.Message);
+            return null;
+        }
     }
 
     private void SendToOthers(ReliableKey key, byte[] payload)
@@ -1383,6 +1421,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentAvatarIndex = -1;
         OpponentAvatarUrl = null;
         OpponentAvatarSprite = null;
+        if (opponentAvatarTexture != null)
+        {
+            Destroy(opponentAvatarTexture);
+            opponentAvatarTexture = null;
+        }
+        opponentAvatarPayload = null;
         loadedOpponentAvatarUrl = null;
         seenAvatarCount = -1;
         seenAvatarChecksum = 0;
@@ -1592,6 +1636,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public Sprite GetOpponentAvatar()
     {
+        if (OpponentAvatarSprite == null && opponentAvatarPayload != null && opponentAvatarPayload.Length > 32)
+            ApplyOpponentAvatarBytes(opponentAvatarPayload, true);
         if (OpponentAvatarSprite != null) return OpponentAvatarSprite;
         if (!string.IsNullOrEmpty(OpponentAvatarUrl))
             return null;
@@ -1632,12 +1678,15 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
                 if (request.result == UnityWebRequest.Result.Success)
                 {
-                    Texture2D texture = DownloadHandlerTexture.GetContent(request);
-                    if (texture != null)
+                    Texture2D downloaded = DownloadHandlerTexture.GetContent(request);
+                    Texture2D owned = CopyReadableTexture(downloaded);
+                    if (owned != null)
                     {
-                        OpponentAvatarSprite = CreateSharpAvatarSprite(texture);
+                        byte[] jpg = owned.EncodeToJPG(90);
+                        if (jpg != null && jpg.Length > 32)
+                            opponentAvatarPayload = jpg;
+                        RememberOpponentAvatar(owned, true);
                         loadedOpponentAvatarUrl = url;
-                        opponentAvatarIsOriginal = true;
                         opponentAvatarRoutine = null;
                         OnOpponentIdentity?.Invoke();
                         yield break;
