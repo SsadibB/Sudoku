@@ -884,6 +884,15 @@ public class ProfileManager : MonoBehaviour
     //     └── Avatar Image
     private Image PresentCircular(Image source)
     {
+        return ApplyCircularMask(source);
+    }
+
+    /// <summary>
+    /// Profile, Searching, and Host Wait avatars share this mask:
+    /// Avatar → Circle Mask → Avatar Image.
+    /// </summary>
+    public static Image ApplyCircularMask(Image source)
+    {
         if (source == null) return null;
         if (source.transform.parent != null && source.transform.parent.name == "Circle Mask")
             return source;

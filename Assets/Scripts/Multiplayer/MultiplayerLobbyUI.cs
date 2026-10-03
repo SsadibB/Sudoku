@@ -653,6 +653,7 @@ public class PlayerSearchVisuals
             visuals.AvatarImage = avatar.GetComponent<Image>();
             if (visuals.AvatarImage == null)
                 visuals.AvatarImage = avatar.GetComponentInChildren<Image>(true);
+            visuals.AvatarImage = ProfileManager.ApplyCircularMask(visuals.AvatarImage);
 
             Transform ring = FindNamed(avatar, "CircleLoading");
             if (ring != null)
@@ -681,7 +682,7 @@ public class PlayerSearchVisuals
                 playerImage = FindNamed(player, "Image");
             if (playerImage == null)
                 playerImage = FindNamed(player, "PlayerImage");
-            if (playerImage != null) visuals.LocalAvatar = playerImage.GetComponent<Image>();
+            if (playerImage != null) visuals.LocalAvatar = ProfileManager.ApplyCircularMask(playerImage.GetComponent<Image>());
 
             Transform playerName = FindNamed(root, "PlayerName_Text");
             if (playerName != null)
@@ -698,6 +699,7 @@ public class PlayerSearchVisuals
     {
         if (LocalNameText != null && !string.IsNullOrEmpty(playerName))
             LocalNameText.text = playerName;
+        LocalAvatar = ProfileManager.ApplyCircularMask(LocalAvatar);
         if (LocalAvatar != null && avatar != null)
         {
             LocalAvatar.sprite = avatar;
@@ -743,6 +745,7 @@ public class PlayerSearchVisuals
         else if (writeNameLabel && SearchText != null)
             SearchText.text = "Searching...";
 
+        AvatarImage = ProfileManager.ApplyCircularMask(AvatarImage);
         if (AvatarImage != null && avatar != null)
         {
             AvatarImage.sprite = avatar;

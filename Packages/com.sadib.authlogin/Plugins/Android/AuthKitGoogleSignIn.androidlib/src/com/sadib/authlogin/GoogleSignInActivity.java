@@ -21,6 +21,7 @@ import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.Arrays;
+import java.lang.ref.WeakReference;
 
 public final class GoogleSignInActivity extends Activity {
     public static final String EXTRA_WEB_CLIENT_ID = "webClientId";
@@ -31,6 +32,23 @@ public final class GoogleSignInActivity extends Activity {
 
     private int requestId;
     private boolean completed;
+    private boolean awaitingAccountPicker;
+    private boolean resumed;
+    private IntentSender pendingAccountPicker;
+
+    static WeakReference<GoogleSignInActivity> current;
+
+    static void finishCurrentQuietly() {
+        GoogleSignInActivity activity = current != null ? current.get() : null;
+        if (activity == null) {
+            return;
+        }
+        current = null;
+        activity.completed = true;
+        activity.awaitingAccountPicker = false;
+        activity.pendingAccountPicker = null;
+        activity.finish();
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -38,8 +56,12 @@ public final class GoogleSignInActivity extends Activity {
 
         if (savedInstanceState != null) {
             requestId = savedInstanceState.getInt(EXTRA_REQUEST_ID, 0);
+            awaitingAccountPicker = savedInstanceState.getBoolean("awaitingAccountPicker", false);
+            current = new WeakReference<>(this);
             return;
         }
+
+        current = new WeakReference<>(this);
 
         requestId = getIntent().getIntExtra(EXTRA_REQUEST_ID, 0);
         String webClientId = getIntent().getStringExtra(EXTRA_WEB_CLIENT_ID);
@@ -72,14 +94,10 @@ public final class GoogleSignInActivity extends Activity {
             }
 
             try {
-                startIntentSenderForResult(
-                        result.getPendingIntent().getIntentSender(),
-                        REQUEST_AUTHORIZE,
-                        null,
-                        0,
-                        0,
-                        0);
-            } catch (IntentSender.SendIntentException e) {
+                pendingAccountPicker = result.getPendingIntent().getIntentSender();
+                awaitingAccountPicker = true;
+                launchAccountPicker();
+            } catch (Exception e) {
                 failAndFinish("native", safeMessage(e));
             }
             return;
@@ -89,29 +107,61 @@ public final class GoogleSignInActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        resumed = true;
+        launchAccountPicker();
+    }
+
+    @Override
+    protected void onPause() {
+        resumed = false;
+        super.onPause();
+    }
+
+    private void launchAccountPicker() {
+        if (!resumed || pendingAccountPicker == null || completed) {
+            return;
+        }
+        IntentSender sender = pendingAccountPicker;
+        pendingAccountPicker = null;
+        try {
+            startIntentSenderForResult(sender, REQUEST_AUTHORIZE, null, 0, 0, 0);
+        } catch (IntentSender.SendIntentException e) {
+            awaitingAccountPicker = false;
+            failAndFinish("native", safeMessage(e));
+        }
+    }
+
+    @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
         if (requestCode != REQUEST_AUTHORIZE) {
             return;
         }
 
-        if (resultCode != RESULT_OK || data == null) {
-            failAndFinish("cancelled", "User cancelled Google sign-in.");
-            return;
+        awaitingAccountPicker = false;
+        if (data != null) {
+            try {
+                AuthorizationResult result = Identity.getAuthorizationClient(this)
+                        .getAuthorizationResultFromIntent(data);
+                succeedAndFinish(result);
+                return;
+            } catch (ApiException e) {
+                if (e.getStatusCode() == CommonStatusCodes.CANCELED || e.getStatusCode() == 12501) {
+                    failAndFinish("cancelled", "User cancelled Google sign-in.");
+                } else {
+                    failAndFinish("native", e.getStatusCode() + ": " + safeMessage(e));
+                }
+                return;
+            } catch (Exception e) {
+                failAndFinish("native", safeMessage(e));
+                return;
+            }
         }
 
-        try {
-            AuthorizationResult result = Identity.getAuthorizationClient(this)
-                    .getAuthorizationResultFromIntent(data);
-            succeedAndFinish(result);
-        } catch (ApiException e) {
-            if (e.getStatusCode() == CommonStatusCodes.CANCELED || e.getStatusCode() == 12501) {
-                failAndFinish("cancelled", "User cancelled Google sign-in.");
-            } else {
-                failAndFinish("native", e.getStatusCode() + ": " + safeMessage(e));
-            }
-        } catch (Exception e) {
-            failAndFinish("native", safeMessage(e));
+        if (resultCode != RESULT_OK) {
+            failAndFinish("cancelled", "User cancelled Google sign-in.");
         }
     }
 
@@ -218,13 +268,13 @@ public final class GoogleSignInActivity extends Activity {
     protected void onSaveInstanceState(Bundle outState) {
         super.onSaveInstanceState(outState);
         outState.putInt(EXTRA_REQUEST_ID, requestId);
+        outState.putBoolean("awaitingAccountPicker", awaitingAccountPicker);
     }
 
     @Override
     protected void onDestroy() {
-        if (!completed && !isChangingConfigurations()) {
-            completed = true;
-            GoogleSignInBridge.deliverError(requestId, "cancelled", "Google sign-in was interrupted.");
+        if (current != null && current.get() == this) {
+            current = null;
         }
         super.onDestroy();
     }

@@ -116,8 +116,10 @@ namespace SadibTools.AuthLogin
 
         private void Start()
         {
-            if (autoSignInSilentlyOnStart)
-                SignIn(_google, silent: true);
+            // Do not start a silent Google sign-in here. It uses the same authorization
+            // activity as the account button, and Play Services then cancels that tap.
+            if (!autoSignInSilentlyOnStart)
+                return;
         }
 
         private void OnDestroy()

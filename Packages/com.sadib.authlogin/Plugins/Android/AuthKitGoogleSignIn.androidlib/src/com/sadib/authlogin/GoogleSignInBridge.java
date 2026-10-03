@@ -21,6 +21,7 @@ public final class GoogleSignInBridge {
     }
 
     public static void requestServerAuthCode(Activity activity, String webClientId, boolean silent, Listener callback) {
+        GoogleSignInActivity.finishCurrentQuietly();
         int requestId = ++nextRequestId;
         activeRequestId = requestId;
         listener = callback;
