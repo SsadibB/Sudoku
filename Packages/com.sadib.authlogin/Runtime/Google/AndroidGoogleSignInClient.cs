@@ -88,13 +88,14 @@ namespace SadibTools.AuthLogin
                 AuthMainThread.Post(() =>
                 {
                     _owner.ClearListener();
-                    if (string.IsNullOrEmpty(serverAuthCode))
+                    GoogleAuthProvider.TakeProfilePayload(serverAuthCode, out string code);
+                    if (string.IsNullOrEmpty(code))
                     {
                         _onFailure?.Invoke(AuthError.Native(ProviderId, "Google returned an empty server auth code."));
                         return;
                     }
 
-                    _onSuccess?.Invoke(serverAuthCode);
+                    _onSuccess?.Invoke(code);
                 });
             }
 

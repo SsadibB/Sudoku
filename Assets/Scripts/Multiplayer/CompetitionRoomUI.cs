@@ -365,6 +365,8 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerManager.Instance.OnOpponentIdentity  += OnOpponentIdentity;
             MultiplayerManager.Instance.OnConnectionFailed  += OnConnectionFailed;
         }
+        if (ProfileManager.Instance != null)
+            ProfileManager.Instance.OnLocalIdentityChanged += RefreshHostIdentity;
         SetButtonsInteractable(true);
     }
 
@@ -377,6 +379,8 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerManager.Instance.OnOpponentIdentity  -= OnOpponentIdentity;
             MultiplayerManager.Instance.OnConnectionFailed  -= OnConnectionFailed;
         }
+        if (ProfileManager.Instance != null)
+            ProfileManager.Instance.OnLocalIdentityChanged -= RefreshHostIdentity;
     }
 
     private void SetButtonsInteractable(bool interactable)
@@ -570,6 +574,13 @@ public class CompetitionRoomUI : MonoBehaviour
         ShowHostWaitOpponent();
     }
 
+    private void RefreshHostIdentity()
+    {
+        if (!hostSelected || !hostSlotVisible) return;
+        ShowHostWaitLocal();
+        ShowHostWaitOpponent();
+    }
+
     private void ShowHostWaitLocal()
     {
         string localName = "You";
@@ -587,7 +598,7 @@ public class CompetitionRoomUI : MonoBehaviour
         var mp = MultiplayerManager.Instance;
         string opponentName = mp != null ? mp.OpponentName : null;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, false);
+        hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
     }
 
     private void EnsureHostStartButton()

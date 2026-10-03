@@ -56,6 +56,8 @@ public class SudokuPlayFabManager : MonoBehaviour
         public int profileXP;
         public int puzzlesSolved;
         public int bestWinStreak;
+        public int gamesPlayed;
+        public int currentWinStreak;
 
         public int easyHighScore;
         public int mediumHighScore;
@@ -210,7 +212,8 @@ public class SudokuPlayFabManager : MonoBehaviour
         {
             ProfileManager.Instance.ApplyCloudStats(
                 cloud.profileLevel, cloud.profileXP, cloud.puzzlesSolved, cloud.bestWinStreak,
-                cloud.easyHighScore, cloud.mediumHighScore, cloud.hardHighScore);
+                cloud.easyHighScore, cloud.mediumHighScore, cloud.hardHighScore,
+                cloud.gamesPlayed, cloud.currentWinStreak);
         }
     }
 
@@ -239,6 +242,8 @@ public class SudokuPlayFabManager : MonoBehaviour
             profileXP = ProfileManager.Instance.CurrentXP,
             puzzlesSolved = ProfileManager.Instance.TotalPuzzlesSolved,
             bestWinStreak = ProfileManager.Instance.BestWinStreak,
+            gamesPlayed = ProfileManager.Instance.GamesPlayed,
+            currentWinStreak = ProfileManager.Instance.CurrentWinStreak,
 
             easyHighScore = ProfileManager.Instance.GetHighScore(UIManager.Difficulty.Easy),
             mediumHighScore = ProfileManager.Instance.GetHighScore(UIManager.Difficulty.Medium),

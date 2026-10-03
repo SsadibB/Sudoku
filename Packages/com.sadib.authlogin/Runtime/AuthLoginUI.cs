@@ -49,11 +49,9 @@ namespace SadibTools.AuthLogin
         [Tooltip("Spinner / loading game object shown while authentication is in progress.")]
         [SerializeField] private GameObject loadingIndicator;
 
-        [Header("Visual Feedback")]
-        [Tooltip("Color of logo when connected.")]
-        [SerializeField] private Color logoConnectedColor = new Color(1f, 1f, 1f, 1f);
-        [Tooltip("Color of logo when disconnected.")]
-        [SerializeField] private Color logoDisconnectedColor = new Color(0.6f, 0.6f, 0.6f, 0.75f);
+        private GameObject loginPanel;
+        private GameObject logoutSection;
+        private bool logoutWired;
         [Tooltip("Text to display when not logged in.")]
         [SerializeField] private string loginText = "Log in";
         [Tooltip("Text to display when logged in.")]
@@ -122,6 +120,9 @@ namespace SadibTools.AuthLogin
 
         private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
         {
+            loginPanel = null;
+            logoutSection = null;
+            logoutWired = false;
             BindAndRefresh();
         }
 
@@ -213,6 +214,9 @@ namespace SadibTools.AuthLogin
 
         public void OnClickSignInGoogle()
         {
+            if (!BeginLoginAttempt())
+                return;
+
             SetStatus("Connecting with Google...");
             AuthManager.EnsureInstance().SignInWithGoogle();
         }
@@ -225,6 +229,9 @@ namespace SadibTools.AuthLogin
 
         public void OnClickSignInFacebook()
         {
+            if (!BeginLoginAttempt())
+                return;
+
             SetStatus("Connecting with Facebook...");
             AuthManager.EnsureInstance().SignInWithFacebook();
         }
@@ -237,6 +244,9 @@ namespace SadibTools.AuthLogin
 
         public void OnClickSignInInstagram()
         {
+            if (!BeginLoginAttempt())
+                return;
+
             SetStatus("Connecting with Instagram...");
             AuthManager.EnsureInstance().SignInWithInstagram();
         }
@@ -253,20 +263,35 @@ namespace SadibTools.AuthLogin
             AuthManager.EnsureInstance().SignOut();
         }
 
+        /// <summary>
+        /// One login at a time. A second tap is ignored while a player-started attempt is running.
+        /// A silent startup attempt can still be replaced by the account button.
+        /// </summary>
+        private static bool BeginLoginAttempt()
+        {
+            AuthManager auth = AuthManager.EnsureInstance();
+            if (auth == null)
+                return false;
+
+            return !auth.IsBusy || auth.IsSilentSignIn;
+        }
+
         // ==================== Event Handlers ====================
 
         private void HandleLoginStarted(string providerId)
         {
             SetLoading(true);
             SetStatus($"Connecting with {GetProviderDisplayName(providerId)}...");
+            RefreshUI();
         }
 
         private void HandleLoginSuccess(AuthSession session)
         {
             SetLoading(false);
             
-            // Connection successful message displayed in status text
-            SetStatus("<color=#4CAF50>Connection Successful!</color>");
+            bool explicitLogin = AuthManager.Instance != null && AuthManager.Instance.LastSignInWasExplicit;
+            if (explicitLogin)
+                SetStatus("<color=#4CAF50>Account Connected Successfully</color>");
 
             if (accountInfoText != null)
             {
@@ -283,6 +308,9 @@ namespace SadibTools.AuthLogin
 
         private void HandleLoginFailure(AuthError error)
         {
+            if (error == null || error.Code == AuthErrorCode.InProgress)
+                return;
+
             SetLoading(false);
             string providerName = GetProviderDisplayName(error.ProviderId);
 
@@ -322,12 +350,14 @@ namespace SadibTools.AuthLogin
             bool isFacebook = auth != null && auth.IsFacebookSignedIn;
             bool isInstagram = auth != null && auth.IsInstagramSignedIn;
             bool isBusy = auth != null && auth.IsBusy;
+            bool loginLocked = isBusy && (auth == null || !auth.IsSilentSignIn);
 
-            SetLoading(isBusy);
+            SetLoading(loginLocked);
 
-            UpdateSlotState(google, isGoogle);
-            UpdateSlotState(facebook, isFacebook);
-            UpdateSlotState(instagram, isInstagram);
+            UpdateSlotState(google, isGoogle, loginLocked);
+            UpdateSlotState(facebook, isFacebook, loginLocked);
+            UpdateSlotState(instagram, isInstagram, loginLocked);
+            ApplyConnectionPanels(auth != null && auth.IsSignedIn);
 
             if (accountInfoText != null && auth != null && auth.IsSignedIn && auth.CurrentSession != null)
             {
@@ -341,15 +371,73 @@ namespace SadibTools.AuthLogin
             }
         }
 
-        private void UpdateSlotState(ProviderSlot slot, bool isConnected)
+        private void ApplyConnectionPanels(bool signedIn)
+        {
+            if (loginPanel == null)
+                loginPanel = FindSceneObject("LoginPanel");
+            if (logoutSection == null)
+                logoutSection = FindSceneObject("LogoutSection");
+
+            if (loginPanel != null)
+                loginPanel.SetActive(!signedIn);
+            if (logoutSection != null)
+                logoutSection.SetActive(signedIn);
+
+            EnsureLogoutButton();
+        }
+
+        private void EnsureLogoutButton()
+        {
+            if (logoutSection == null || logoutWired)
+                return;
+
+            Button[] buttons = logoutSection.GetComponentsInChildren<Button>(true);
+            if (buttons == null || buttons.Length == 0)
+            {
+                Image image = logoutSection.GetComponentInChildren<Image>(true);
+                if (image == null)
+                    return;
+
+                Button created = image.gameObject.GetComponent<Button>();
+                if (created == null)
+                    created = image.gameObject.AddComponent<Button>();
+                created.targetGraphic = image;
+                buttons = new[] { created };
+            }
+
+            for (int i = 0; i < buttons.Length; i++)
+            {
+                if (buttons[i] == null)
+                    continue;
+                buttons[i].onClick.RemoveListener(OnClickSignOutAll);
+                buttons[i].onClick.AddListener(OnClickSignOutAll);
+            }
+
+            logoutWired = true;
+        }
+
+        private static GameObject FindSceneObject(string objectName)
+        {
+            Transform[] transforms = FindObjectsByType<Transform>(FindObjectsInactive.Include, FindObjectsSortMode.None);
+            for (int i = 0; i < transforms.Length; i++)
+            {
+                if (transforms[i] == null || transforms[i].name != objectName)
+                    continue;
+                if (!transforms[i].gameObject.scene.IsValid())
+                    continue;
+                return transforms[i].gameObject;
+            }
+
+            return null;
+        }
+
+        private void UpdateSlotState(ProviderSlot slot, bool isConnected, bool loginLocked)
         {
             if (slot == null) return;
 
-            // 1. Logo active brightness / color
+            // White leaves the sprite's own colors unchanged.
             if (slot.logoImage != null)
-            {
-                slot.logoImage.color = isConnected ? logoConnectedColor : logoDisconnectedColor;
-            }
+                slot.logoImage.color = Color.white;
 
             // 2. Label text ("Log in" vs "Log out")
             string displayText = isConnected ? logoutText : loginText;
@@ -370,6 +458,15 @@ namespace SadibTools.AuthLogin
                 foreach (var b in slot.allButtons)
                 {
                     if (b == null) continue;
+                    ColorBlock colors = b.colors;
+                    colors.normalColor = Color.white;
+                    colors.highlightedColor = Color.white;
+                    colors.pressedColor = Color.white;
+                    colors.selectedColor = Color.white;
+                    colors.disabledColor = Color.white;
+                    colors.colorMultiplier = 1f;
+                    b.colors = colors;
+                    b.interactable = !loginLocked;
                     var tmp = b.GetComponentInChildren<TMP_Text>(includeInactive: true);
                     if (tmp != null) tmp.text = displayText;
                     var txt = b.GetComponentInChildren<Text>(includeInactive: true);
@@ -433,8 +530,28 @@ namespace SadibTools.AuthLogin
             {
                 if (btn == null) continue;
                 EnsureButtonRaycastable(btn);
+                SuppressDirectAuthCalls(btn);
                 btn.onClick.RemoveListener(toggleAction);
                 btn.onClick.AddListener(toggleAction);
+            }
+        }
+
+        private static void SuppressDirectAuthCalls(Button btn)
+        {
+            int count = btn.onClick.GetPersistentEventCount();
+            for (int i = 0; i < count; i++)
+            {
+                string method = btn.onClick.GetPersistentMethodName(i);
+                if (method != "SignInWithGoogle"
+                    && method != "SignInWithFacebook"
+                    && method != "SignInWithInstagram"
+                    && method != "SignOutGoogle"
+                    && method != "SignOutFacebook"
+                    && method != "SignOutInstagram"
+                    && method != "SignOut")
+                    continue;
+
+                btn.onClick.SetPersistentListenerState(i, UnityEngine.Events.UnityEventCallState.Off);
             }
         }
 

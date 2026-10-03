@@ -95,6 +95,9 @@ public class MultiplayerLobbyUI : MonoBehaviour
             MultiplayerManager.Instance.OnOpponentIdentity += RefreshOpponentIdentity;
             MultiplayerManager.Instance.OnRematchStateChanged += RefreshRematchState;
         }
+
+        if (ProfileManager.Instance != null)
+            ProfileManager.Instance.OnLocalIdentityChanged += RefreshLocalSearchIdentity;
     }
 
     private void OnDisable()
@@ -107,6 +110,8 @@ public class MultiplayerLobbyUI : MonoBehaviour
             MultiplayerManager.Instance.OnOpponentIdentity -= RefreshOpponentIdentity;
             MultiplayerManager.Instance.OnRematchStateChanged -= RefreshRematchState;
         }
+        if (ProfileManager.Instance != null)
+            ProfileManager.Instance.OnLocalIdentityChanged -= RefreshLocalSearchIdentity;
         StopSpinner();
         CancelAutoStart();
     }
@@ -348,6 +353,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         if (!opponentFound) return;
         ApplyFoundPlayers();
+    }
+
+    private void RefreshLocalSearchIdentity()
+    {
+        if (searchingGroup != null && searchingGroup.activeInHierarchy)
+            ShowLocalPlayer();
+        if (opponentFound)
+            ApplyFoundPlayers();
     }
 
     private void RefreshRematchState()
@@ -666,6 +679,8 @@ public class PlayerSearchVisuals
             Transform playerImage = FindNamed(player, "AvatarImage");
             if (playerImage == null)
                 playerImage = FindNamed(player, "Image");
+            if (playerImage == null)
+                playerImage = FindNamed(player, "PlayerImage");
             if (playerImage != null) visuals.LocalAvatar = playerImage.GetComponent<Image>();
 
             Transform playerName = FindNamed(root, "PlayerName_Text");
@@ -686,6 +701,7 @@ public class PlayerSearchVisuals
         if (LocalAvatar != null && avatar != null)
         {
             LocalAvatar.sprite = avatar;
+            LocalAvatar.color = Color.white;
             LocalAvatar.enabled = true;
             LocalAvatar.gameObject.SetActive(true);
         }

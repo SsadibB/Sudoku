@@ -1,7 +1,9 @@
 using System.Collections;
 using System.IO;
+using SadibTools.AuthLogin;
 using TMPro;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
 
@@ -91,8 +93,14 @@ public class ProfileManager : MonoBehaviour
     public int ProfileLevel { get; private set; }
 
     public const string PlayerNameKey = "PlayerDisplayName";
+    private const string NameBeforeAccountKey = "ProfileNameBeforeAccount";
+    private const string AccountPhotoUrlKey = "AccountPhotoUrl";
+    private const int MaxPlayerNameLength = 32;
+
     public string PlayerName { get; private set; } = "Player";
+    public string AvatarUrl { get; private set; }
     public event System.Action<string> OnPlayerNameChanged;
+    public event System.Action OnLocalIdentityChanged;
 
     private bool editingName;
     private int ignoreEditClickFrame = -1;
@@ -110,12 +118,21 @@ public class ProfileManager : MonoBehaviour
     // ==================== Game Stats (data) ====================
 
     private const string PuzzlesSolvedKey = "TotalPuzzlesSolved";
+    private const string GamesPlayedKey = "GamesPlayed";
     private const string CurrentStreakKey = "CurrentWinStreak";
     private const string BestStreakKey = "BestWinStreak";
 
     private static string HighScoreKey(UIManager.Difficulty difficulty) => $"HighScore_{difficulty}";
 
     public int TotalPuzzlesSolved { get; private set; }
+
+    // Finished matches, single player and multiplayer together.
+    // Wins are TotalPuzzlesSolved, so a win is never counted without a played game.
+    public int GamesPlayed { get; private set; }
+    public int GamesWon => TotalPuzzlesSolved;
+
+    public int WinRatePercent =>
+        GamesPlayed <= 0 ? 0 : Mathf.Clamp(Mathf.RoundToInt(100f * GamesWon / GamesPlayed), 0, 100);
 
     // Consecutive victories with no loss in between. Resets to 0 on a loss.
     public int CurrentWinStreak { get; private set; }
@@ -170,6 +187,11 @@ public class ProfileManager : MonoBehaviour
         CurrentXP = Mathf.Max(0, PlayerPrefs.GetInt(ProfileXPKey, 0));
 
         TotalPuzzlesSolved = Mathf.Max(0, PlayerPrefs.GetInt(PuzzlesSolvedKey, 0));
+        GamesPlayed = PlayerPrefs.HasKey(GamesPlayedKey)
+            ? Mathf.Max(0, PlayerPrefs.GetInt(GamesPlayedKey, 0))
+            : TotalPuzzlesSolved;
+        if (GamesPlayed < TotalPuzzlesSolved)
+            GamesPlayed = TotalPuzzlesSolved;
         CurrentWinStreak = Mathf.Max(0, PlayerPrefs.GetInt(CurrentStreakKey, 0));
         BestWinStreak = Mathf.Max(0, PlayerPrefs.GetInt(BestStreakKey, 0));
 
@@ -200,11 +222,30 @@ public class ProfileManager : MonoBehaviour
         // saved name again once every UI component has enabled.
         ApplyPlayerNameToLabels();
         RefreshLevelDisplay();
+        RefreshStatsDisplay();
+        SubscribeToAccount();
+    }
+
+    private void SubscribeToAccount()
+    {
+        AuthManager auth = AuthManager.EnsureInstance();
+        if (auth == null) return;
+        auth.OnLoginSuccess -= HandleAccountLogin;
+        auth.OnSignedOut -= HandleAccountLogout;
+        auth.OnLoginSuccess += HandleAccountLogin;
+        auth.OnSignedOut += HandleAccountLogout;
+        if (auth.IsSignedIn && auth.CurrentSession != null)
+            HandleAccountLogin(auth.CurrentSession);
     }
 
     private void OnDestroy()
     {
         SceneManager.sceneLoaded -= OnSceneLoaded;
+        if (AuthManager.Instance != null)
+        {
+            AuthManager.Instance.OnLoginSuccess -= HandleAccountLogin;
+            AuthManager.Instance.OnSignedOut -= HandleAccountLogout;
+        }
     }
 
     private void OnSceneLoaded(Scene scene, LoadSceneMode mode)
@@ -301,7 +342,7 @@ public class ProfileManager : MonoBehaviour
         if (string.IsNullOrWhiteSpace(name)) return;
 
         name = name.Trim();
-        if (name.Length > 16) name = name.Substring(0, 16);
+        if (name.Length > MaxPlayerNameLength) name = name.Substring(0, MaxPlayerNameLength);
         if (name == PlayerName)
         {
             ApplyPlayerNameToLabels();
@@ -313,6 +354,7 @@ public class ProfileManager : MonoBehaviour
         PlayerPrefs.Save();
         ApplyPlayerNameToLabels();
         OnPlayerNameChanged?.Invoke(PlayerName);
+        OnLocalIdentityChanged?.Invoke();
 
         if (MultiplayerManager.Instance != null)
             MultiplayerManager.Instance.SetLocalPlayerName(PlayerName);
@@ -352,7 +394,7 @@ public class ProfileManager : MonoBehaviour
         nameInput.onEndEdit.AddListener(OnNameEndEdit);
         nameInput.onSubmit.RemoveListener(OnNameEndEdit);
         nameInput.onSubmit.AddListener(OnNameEndEdit);
-        nameInput.characterLimit = 16;
+        nameInput.characterLimit = MaxPlayerNameLength;
         nameInput.lineType = TMP_InputField.LineType.SingleLine;
         nameInput.readOnly = !editingName;
     }
@@ -421,12 +463,25 @@ public class ProfileManager : MonoBehaviour
 
     private void ApplyPlayerNameToLabels()
     {
+        BindLiveNameFields();
+
         if (!editingName)
         {
             if (nameInput != null)
+            {
                 nameInput.text = PlayerName;
-            else if (nameText != null)
+                if (nameInput.textComponent != null)
+                    nameInput.textComponent.text = PlayerName;
+                nameInput.ForceLabelUpdate();
+                FitNameLabel(nameInput.textComponent);
+            }
+
+            if (nameText != null)
+            {
                 nameText.text = PlayerName;
+                FitNameLabel(nameText);
+                nameText.ForceMeshUpdate();
+            }
         }
 
         TMP_Text[] labels = Resources.FindObjectsOfTypeAll<TMP_Text>();
@@ -441,8 +496,25 @@ public class ProfileManager : MonoBehaviour
                 && labels[i].transform.parent.name == "Profile")
             {
                 labels[i].text = PlayerName;
+                FitNameLabel(labels[i]);
             }
         }
+    }
+
+    // Short names stay at the designed size. Longer names shrink until the
+    // whole string fits inside the label rect.
+    private static void FitNameLabel(TMP_Text label)
+    {
+        if (label == null) return;
+
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+        label.overflowMode = TextOverflowModes.Overflow;
+        float designed = label.enableAutoSizing && label.fontSizeMax > 1f
+            ? label.fontSizeMax
+            : (label.fontSize > 1f ? label.fontSize : 36f);
+        label.enableAutoSizing = true;
+        label.fontSizeMax = designed;
+        label.fontSizeMin = Mathf.Clamp(designed * 0.35f, 10f, designed);
     }
 
     private void ClosePanel()
@@ -636,8 +708,262 @@ public class ProfileManager : MonoBehaviour
     private void ApplySprite(Sprite sprite)
     {
         currentAvatarSprite = sprite;
-        if (profileIconImage != null) profileIconImage.sprite = sprite;
-        if (profilePreviewImage != null) profilePreviewImage.sprite = sprite;
+        BindLiveProfileImages();
+        profileIconImage = PresentCircular(profileIconImage);
+        profilePreviewImage = PresentCircular(profilePreviewImage);
+        if (profileIconButton != null && profileIconImage != null
+            && profileIconButton.targetGraphic != profileIconImage)
+        {
+            // Keep the menu button clickable after the photo moves under the mask.
+            Graphic previous = profileIconButton.targetGraphic;
+            if (previous == null || previous.gameObject.name == "Avatar")
+                profileIconButton.targetGraphic = profileIconImage;
+        }
+
+        AssignAvatar(profileIconImage, sprite);
+        AssignAvatar(profilePreviewImage, sprite);
+        OnLocalIdentityChanged?.Invoke();
+    }
+
+    private void BindLiveNameFields()
+    {
+        if (profilePanel == null) return;
+
+        if (nameInput == null)
+        {
+            Transform name = FindNamed(profilePanel.transform, "NameText");
+            if (name != null)
+                nameInput = name.GetComponent<TMP_InputField>();
+        }
+
+        if (nameText == null && nameInput != null)
+            nameText = nameInput.textComponent;
+    }
+
+    private void BindLiveProfileImages()
+    {
+        if (profilePanel != null)
+        {
+            Image panelAvatar = FindAvatarImage(profilePanel.transform);
+            if (panelAvatar != null)
+                profilePreviewImage = panelAvatar;
+        }
+
+        Image menuAvatar = null;
+        if (profileIconButton != null)
+            menuAvatar = FindAvatarImage(profileIconButton.transform);
+        if (menuAvatar == null)
+            menuAvatar = FindMenuProfileAvatar();
+        if (menuAvatar != null)
+            profileIconImage = menuAvatar;
+    }
+
+    private static Image FindMenuProfileAvatar()
+    {
+        Transform[] transforms = Resources.FindObjectsOfTypeAll<Transform>();
+        for (int i = 0; i < transforms.Length; i++)
+        {
+            Transform candidate = transforms[i];
+            if (candidate == null || candidate.name != "Profile" || !candidate.gameObject.scene.IsValid())
+                continue;
+            if (candidate.parent == null || candidate.parent.name != "MainMenu")
+                continue;
+            return FindAvatarImage(candidate);
+        }
+
+        return null;
+    }
+
+    private static Image FindAvatarImage(Transform root)
+    {
+        Transform inner = FindNamed(root, "Avatar Image");
+        if (inner != null)
+        {
+            Image image = inner.GetComponent<Image>();
+            if (image != null)
+                return image;
+        }
+
+        Transform avatar = FindNamed(root, "Avatar");
+        if (avatar == null)
+            return null;
+        return avatar.GetComponent<Image>();
+    }
+
+    private static void AssignAvatar(Image image, Sprite sprite)
+    {
+        if (image == null || sprite == null)
+            return;
+
+        image.sprite = sprite;
+        image.color = Color.white;
+        image.enabled = true;
+        image.preserveAspect = false;
+    }
+
+    private void HandleAccountLogin(AuthSession session)
+    {
+        if (session == null) return;
+
+        if (!string.IsNullOrWhiteSpace(session.DisplayName))
+        {
+            if (!PlayerPrefs.HasKey(NameBeforeAccountKey))
+                PlayerPrefs.SetString(NameBeforeAccountKey, PlayerName);
+            SetPlayerName(session.DisplayName);
+        }
+        else
+        {
+            ApplyPlayerNameToLabels();
+        }
+
+        if (string.IsNullOrWhiteSpace(session.PhotoUrl))
+        {
+            MultiplayerManager.Instance?.RefreshLocalIdentity();
+            return;
+        }
+
+        if (session.PhotoUrl == AvatarUrl && currentAvatarSprite != null)
+        {
+            MultiplayerManager.Instance?.RefreshLocalIdentity();
+            return;
+        }
+
+        AvatarUrl = session.PhotoUrl;
+        PlayerPrefs.SetString(AccountPhotoUrlKey, session.PhotoUrl);
+        PlayerPrefs.Save();
+        if (accountAvatarRoutine != null)
+            StopCoroutine(accountAvatarRoutine);
+        accountAvatarRoutine = StartCoroutine(DownloadAccountAvatar(session.PhotoUrl));
+    }
+
+    private void HandleAccountLogout(string providerId)
+    {
+        AvatarUrl = null;
+        PlayerPrefs.DeleteKey(AccountPhotoUrlKey);
+
+        string previous = PlayerPrefs.GetString(NameBeforeAccountKey, "");
+        PlayerPrefs.DeleteKey(NameBeforeAccountKey);
+        PlayerPrefs.Save();
+
+        if (!string.IsNullOrWhiteSpace(previous))
+            SetPlayerName(previous);
+        else if (string.IsNullOrWhiteSpace(PlayerName))
+            SetPlayerName("Player");
+
+        LoadSavedProfilePicture();
+        MultiplayerManager.Instance?.RefreshLocalIdentity();
+    }
+
+    private Coroutine accountAvatarRoutine;
+
+    private IEnumerator DownloadAccountAvatar(string url)
+    {
+        using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(url))
+        {
+            yield return request.SendWebRequest();
+            accountAvatarRoutine = null;
+            if (url != AvatarUrl)
+                yield break;
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning("[ProfileManager] Account photo download failed: " + request.error);
+                yield break;
+            }
+
+            Texture2D texture = DownloadHandlerTexture.GetContent(request);
+            if (texture == null)
+                yield break;
+
+            ApplySprite(SpriteFromTexture(texture));
+            MultiplayerManager.Instance?.RefreshLocalIdentity();
+        }
+    }
+
+    // Profile Avatar
+    // └── Circle Mask
+    //     └── Avatar Image
+    private Image PresentCircular(Image source)
+    {
+        if (source == null) return null;
+        if (source.transform.parent != null && source.transform.parent.name == "Circle Mask")
+            return source;
+
+        Transform existingMask = source.transform.Find("Circle Mask");
+        if (existingMask != null)
+        {
+            Transform existingImage = existingMask.Find("Avatar Image");
+            Image ready = existingImage != null ? existingImage.GetComponent<Image>() : null;
+            if (ready != null)
+            {
+                source.enabled = false;
+                return ready;
+            }
+        }
+
+        GameObject maskGo = new GameObject("Circle Mask", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image), typeof(Mask));
+        maskGo.layer = source.gameObject.layer;
+        RectTransform maskRect = maskGo.GetComponent<RectTransform>();
+        maskRect.SetParent(source.transform, false);
+        Stretch(maskRect);
+
+        Image maskImage = maskGo.GetComponent<Image>();
+        maskImage.sprite = CircleMaskSprite();
+        maskImage.type = Image.Type.Simple;
+        maskImage.color = Color.white;
+        maskImage.raycastTarget = false;
+        maskGo.GetComponent<Mask>().showMaskGraphic = false;
+
+        GameObject imageGo = new GameObject("Avatar Image", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+        imageGo.layer = source.gameObject.layer;
+        RectTransform imageRect = imageGo.GetComponent<RectTransform>();
+        imageRect.SetParent(maskRect, false);
+        Stretch(imageRect);
+
+        Image inner = imageGo.GetComponent<Image>();
+        inner.sprite = source.sprite;
+        inner.color = Color.white;
+        inner.preserveAspect = false;
+        inner.raycastTarget = true;
+        inner.type = Image.Type.Simple;
+
+        source.enabled = false;
+        return inner;
+    }
+
+    private static void Stretch(RectTransform rect)
+    {
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.localScale = Vector3.one;
+    }
+
+    private static Sprite circleMaskSprite;
+
+    private static Sprite CircleMaskSprite()
+    {
+        if (circleMaskSprite != null) return circleMaskSprite;
+
+        const int size = 128;
+        Texture2D texture = new Texture2D(size, size, TextureFormat.RGBA32, false);
+        Color[] pixels = new Color[size * size];
+        float radius = size * 0.5f - 0.5f;
+        Vector2 center = new Vector2(radius, radius);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                float distance = Vector2.Distance(new Vector2(x, y), center);
+                pixels[y * size + x] = distance <= radius ? Color.white : Color.clear;
+            }
+        }
+
+        texture.SetPixels(pixels);
+        texture.Apply();
+        circleMaskSprite = Sprite.Create(texture, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100f);
+        return circleMaskSprite;
     }
 
     private void SaveCustomImage(Texture2D texture)
@@ -704,6 +1030,19 @@ public class ProfileManager : MonoBehaviour
         return baseXPRequired + Mathf.Max(0, level - 1) * xpIncreasePerLevel;
     }
 
+    // One match fills only part of the current level. A finished puzzle scores
+    // several hundred points; adding that 1:1 used to jump several levels.
+    public void AddMatchScoreProgress(int matchScore)
+    {
+        if (matchScore <= 0) return;
+
+        const float xpPerScorePoint = 0.04f;
+        int raw = Mathf.Max(1, Mathf.RoundToInt(matchScore * xpPerScorePoint));
+        int required = GetXPRequiredForLevel(ProfileLevel);
+        int cap = Mathf.Max(1, Mathf.FloorToInt(required * 0.4f));
+        AddXP(Mathf.Min(raw, cap));
+    }
+
     public void AddXP(int amount)
     {
         if (amount <= 0) return;
@@ -746,38 +1085,37 @@ public class ProfileManager : MonoBehaviour
     // score for that puzzle.
     public void RecordVictory(UIManager.Difficulty difficulty, int score)
     {
+        GamesPlayed++;
         TotalPuzzlesSolved++;
-        PlayerPrefs.SetInt(PuzzlesSolvedKey, TotalPuzzlesSolved);
+        CurrentWinStreak++;
 
         if (score > GetHighScore(difficulty))
-        {
             PlayerPrefs.SetInt(HighScoreKey(difficulty), score);
-        }
-
-        CurrentWinStreak++;
-        PlayerPrefs.SetInt(CurrentStreakKey, CurrentWinStreak);
 
         if (CurrentWinStreak > BestWinStreak)
-        {
             BestWinStreak = CurrentWinStreak;
-            PlayerPrefs.SetInt(BestStreakKey, BestWinStreak);
-        }
 
-        PlayerPrefs.Save();
-        RefreshStatsDisplay();
+        SaveMatchStats();
     }
 
-    // Call on a loss (out of hearts / game over), from
-    // SudokuGameManager.HandleGameOver(). Only breaks the current streak —
-    // puzzles-solved and high scores are untouched by a loss.
+    // A finished loss counts as a game played and clears the shared streak.
+    // Wins are left unchanged.
     public void RecordLoss()
     {
-        if (CurrentWinStreak == 0) return; // nothing to reset, skip the write
-
+        GamesPlayed++;
         CurrentWinStreak = 0;
-        PlayerPrefs.SetInt(CurrentStreakKey, 0);
+        SaveMatchStats();
+    }
+
+    private void SaveMatchStats()
+    {
+        PlayerPrefs.SetInt(GamesPlayedKey, GamesPlayed);
+        PlayerPrefs.SetInt(PuzzlesSolvedKey, TotalPuzzlesSolved);
+        PlayerPrefs.SetInt(CurrentStreakKey, CurrentWinStreak);
+        PlayerPrefs.SetInt(BestStreakKey, BestWinStreak);
         PlayerPrefs.Save();
         RefreshStatsDisplay();
+        SudokuPlayFabManager.Instance?.PushToCloud();
     }
 
     // ==================== Cloud sync (PlayFab) ====================
@@ -795,7 +1133,8 @@ public class ProfileManager : MonoBehaviour
     // easyHigh/mediumHigh/hardHigh let the caller pass all three
     // difficulties' high scores in one call.
     public void ApplyCloudStats(int cloudProfileLevel, int cloudXP, int cloudPuzzlesSolved,
-        int cloudBestWinStreak, int easyHigh, int mediumHigh, int hardHigh)
+        int cloudBestWinStreak, int easyHigh, int mediumHigh, int hardHigh,
+        int cloudGamesPlayed = 0, int cloudCurrentStreak = 0)
     {
         bool changed = false;
 
@@ -807,12 +1146,24 @@ public class ProfileManager : MonoBehaviour
             changed = true;
         }
 
+        int playedBefore = GamesPlayed;
+        int wonBefore = TotalPuzzlesSolved;
+        int streakBefore = CurrentWinStreak;
+
         if (cloudPuzzlesSolved > TotalPuzzlesSolved)
-        {
             TotalPuzzlesSolved = cloudPuzzlesSolved;
-            PlayerPrefs.SetInt(PuzzlesSolvedKey, TotalPuzzlesSolved);
+        if (cloudGamesPlayed > GamesPlayed)
+            GamesPlayed = cloudGamesPlayed;
+        if (GamesPlayed < TotalPuzzlesSolved)
+            GamesPlayed = TotalPuzzlesSolved;
+
+        bool cloudMatchesAhead = cloudGamesPlayed > playedBefore
+            || (cloudGamesPlayed == playedBefore && cloudPuzzlesSolved > wonBefore);
+        if (cloudMatchesAhead)
+            CurrentWinStreak = Mathf.Max(0, cloudCurrentStreak);
+
+        if (GamesPlayed != playedBefore || TotalPuzzlesSolved != wonBefore || CurrentWinStreak != streakBefore)
             changed = true;
-        }
 
         if (cloudBestWinStreak > BestWinStreak)
         {
@@ -828,6 +1179,10 @@ public class ProfileManager : MonoBehaviour
         if (changed)
         {
             SaveProfileLevel();
+            PlayerPrefs.SetInt(GamesPlayedKey, GamesPlayed);
+            PlayerPrefs.SetInt(PuzzlesSolvedKey, TotalPuzzlesSolved);
+            PlayerPrefs.SetInt(CurrentStreakKey, CurrentWinStreak);
+            PlayerPrefs.SetInt(BestStreakKey, BestWinStreak);
             PlayerPrefs.Save();
             OnXPChanged?.Invoke(CurrentXP, GetXPRequiredForLevel(ProfileLevel), ProfileLevel);
             RefreshStatsDisplay();
@@ -865,14 +1220,41 @@ public class ProfileManager : MonoBehaviour
         }
 
         if (winStreakText != null)
-        {
-            winStreakText.text = $"{Translate(WinStreakLabel)}: {BestWinStreak}";
-        }
+            winStreakText.text = $"{Translate(WinStreakLabel)}: {CurrentWinStreak}";
 
         if (puzzlesSolvedText != null)
-        {
             puzzlesSolvedText.text = $"{Translate(PuzzlesSolvedLabel)}: {TotalPuzzlesSolved}";
-        }
+
+        SetStatValue("GamePlayed", GamesPlayed.ToString());
+        SetStatValue("GameWon", GamesWon.ToString());
+        SetStatValue("GameWinRate", WinRatePercent + "%");
+        SetStreakValue(CurrentWinStreak);
+    }
+
+    private void SetStatValue(string cardName, string value)
+    {
+        if (profilePanel == null) return;
+        Transform card = FindNamed(profilePanel.transform, cardName);
+        if (card == null) return;
+        Transform valueRoot = FindNamed(card, "Value");
+        TMP_Text text = valueRoot != null
+            ? valueRoot.GetComponentInChildren<TMP_Text>(true)
+            : null;
+        if (text != null)
+            text.text = value;
+    }
+
+    private void SetStreakValue(int streak)
+    {
+        if (profilePanel == null) return;
+        Transform lower = FindNamed(profilePanel.transform, "LowerStats");
+        if (lower == null) return;
+        Transform valueRoot = FindNamed(lower, "Value");
+        TMP_Text text = valueRoot != null
+            ? valueRoot.GetComponentInChildren<TMP_Text>(true)
+            : null;
+        if (text != null)
+            text.text = streak + " WINS";
     }
 
     // Level badge, score-to-next-level fill, and "current/required" label
@@ -918,7 +1300,7 @@ public class ProfileManager : MonoBehaviour
         Transform background = FindNamed(profileIconButton.transform, "LevelBackGround");
         if (background == null) return;
 
-        menuLevelFill = background.GetComponent<Image>();
+        menuLevelFill = EnsureXpFill(background);
         if (menuLevelLabel == null)
         {
             Transform text = FindNamed(background, "Text (TMP)");
@@ -940,11 +1322,56 @@ public class ProfileManager : MonoBehaviour
 
         Transform bar = FindNamed(profilePanel.transform, "LEVELBG");
         if (bar != null)
-            profileXPFillImage = bar.GetComponent<Image>();
+            profileXPFillImage = EnsureXpFill(bar);
 
         HideNamed(profilePanel.transform, "LevelProgressTrack");
         HideNamed(profilePanel.transform, "LevelProgressText");
         HideNamed(profilePanel.transform, "LevelProgressFill");
+    }
+
+    private static Image EnsureXpFill(Transform bar)
+    {
+        if (bar == null) return null;
+
+        const string fillName = "LevelXpFill";
+        Transform existing = bar.Find(fillName);
+        Image fill;
+        if (existing == null)
+        {
+            GameObject go = new GameObject(fillName, typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            go.layer = bar.gameObject.layer;
+            RectTransform rect = go.GetComponent<RectTransform>();
+            rect.SetParent(bar, false);
+            rect.anchorMin = Vector2.zero;
+            rect.anchorMax = Vector2.one;
+            rect.offsetMin = new Vector2(8f, 8f);
+            rect.offsetMax = new Vector2(-8f, -8f);
+            fill = go.GetComponent<Image>();
+            fill.sprite = BuiltinUiSprite();
+            fill.color = new Color(0.18f, 0.62f, 0.95f, 0.95f);
+            fill.raycastTarget = false;
+            go.transform.SetSiblingIndex(0);
+        }
+        else
+        {
+            fill = existing.GetComponent<Image>();
+        }
+
+        if (fill != null)
+        {
+            fill.type = Image.Type.Filled;
+            fill.fillMethod = Image.FillMethod.Horizontal;
+            fill.fillOrigin = (int)Image.OriginHorizontal.Left;
+        }
+
+        Image track = bar.GetComponent<Image>();
+        if (track != null)
+        {
+            track.type = Image.Type.Simple;
+            track.fillAmount = 1f;
+        }
+
+        return fill;
     }
 
     private static void HideNamed(Transform root, string objectName)

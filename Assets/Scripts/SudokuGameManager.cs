@@ -215,9 +215,6 @@ public class SudokuGameManager : MonoBehaviour
 
     // ---- NEW: Score & Timer, tracked per level attempt ----
     private int sessionScore;
-    // How much of sessionScore has already been turned into profile XP.
-    // A new puzzle resets the score without taking XP back.
-    private int profileScoreApplied;
     private float levelStartTime;
     private float levelElapsedSeconds;
     // Latched when a multiplayer puzzle starts. UTC keeps moving while the
@@ -776,7 +773,8 @@ public class SudokuGameManager : MonoBehaviour
         if (hintButton != null) hintButton.interactable = true;
 
         sessionScore = 0;
-        profileScoreApplied = 0;
+        matchProgressGranted = false;
+        matchStatsRecorded = false;
         levelStartTime = Time.time;
         levelElapsedSeconds = 0f;
         _matchStartUtc = DateTime.UtcNow;
@@ -1306,20 +1304,23 @@ public class SudokuGameManager : MonoBehaviour
         levelElapsedSeconds = ElapsedSeconds;
         isGameActive = false;
 
-        // Board-complete points raise the profile level through UpdateScoreHud.
         sessionScore += scorePerBoardComplete;
         UpdateScoreHud();
+        GrantMatchProgress();
         Debug.Log($"[SudokuGameManager] Victory on {currentDifficulty} Level {currentLevel}. Highest completed before unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
         LevelManager.Instance?.CompleteLevel(currentDifficulty, currentLevel);
         Debug.Log($"[SudokuGameManager] Highest completed after unlock: {(LevelManager.Instance != null ? LevelManager.Instance.GetHighestCompleted(currentDifficulty).ToString() : "no LevelManager.Instance")}");
-        ProfileManager.Instance?.RecordVictory(currentDifficulty, sessionScore);
+        // Multiplayer records the match once from the result panel, because
+        // finishing the board is not always a win.
+        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
+        if (!isMultiplayer)
+            RecordCompletedMatch(true);
 
         // ---- Multiplayer hook ----
         OnBoardComplete?.Invoke();
 
         // In multiplayer the result is shown by MultiplayerResultPanel; skip
         // the single-player output panel so the two don't stack.
-        bool isMultiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
         if (!isMultiplayer)
             ShowOutputPanel(isVictory: true);
     }
@@ -1333,6 +1334,7 @@ public class SudokuGameManager : MonoBehaviour
 
         levelElapsedSeconds = ElapsedSeconds;
         isGameActive = false;
+        GrantMatchProgress();
         StopRandomSfxLoop();
 
         bool multiplayer = MultiplayerManager.Instance != null
@@ -1352,7 +1354,7 @@ public class SudokuGameManager : MonoBehaviour
         ResolveLoadingAndRevive();
         if (revivePanel == null)
         {
-            ProfileManager.Instance?.RecordLoss();
+            RecordCompletedMatch(false);
             ShowOutputPanel(isVictory: false);
             return;
         }
@@ -1399,7 +1401,7 @@ public class SudokuGameManager : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX("Button");
         if (revivePanel != null) revivePanel.SetActive(false);
-        ProfileManager.Instance?.RecordLoss();
+        RecordCompletedMatch(false);
         ShowOutputPanel(isVictory: false);
     }
 
@@ -1584,16 +1586,37 @@ public class SudokuGameManager : MonoBehaviour
             : $"{minutes:00}:{secs:00}";
     }
 
-    // Call any time sessionScore changes, to keep the live HUD and profile level in sync.
+    // Call any time sessionScore changes, to keep the live HUD in sync.
+    // Profile level progress is granted once, when the match actually ends.
     private void UpdateScoreHud()
     {
         if (hudScoreText != null) hudScoreText.text = sessionScore.ToString();
         OnScoreChanged?.Invoke(sessionScore);
+    }
 
-        int gained = sessionScore - profileScoreApplied;
-        profileScoreApplied = sessionScore;
-        if (gained > 0)
-            ProfileManager.Instance?.AddXP(gained);
+    private bool matchProgressGranted;
+    private bool matchStatsRecorded;
+
+    /// <summary>
+    /// Counts one finished match toward the shared profile stats.
+    /// A second call for the same attempt does nothing.
+    /// </summary>
+    public void RecordCompletedMatch(bool won)
+    {
+        if (matchStatsRecorded) return;
+        matchStatsRecorded = true;
+
+        if (won)
+            ProfileManager.Instance?.RecordVictory(currentDifficulty, sessionScore);
+        else
+            ProfileManager.Instance?.RecordLoss();
+    }
+
+    private void GrantMatchProgress()
+    {
+        if (matchProgressGranted) return;
+        matchProgressGranted = true;
+        ProfileManager.Instance?.AddMatchScoreProgress(sessionScore);
     }
 
     private enum ConfirmationAction
@@ -1835,6 +1858,7 @@ public class SudokuGameManager : MonoBehaviour
     {
         if (isGameActive)
             levelElapsedSeconds = ElapsedSeconds;
+        GrantMatchProgress();
         isGameActive = false;
         StopRandomSfxLoop();
         if (gridLayout != null)

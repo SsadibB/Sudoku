@@ -5,6 +5,7 @@ using System.Reflection;
 using System.Text;
 using System.Threading.Tasks;
 using UnityEngine;
+using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
 using Fusion;
 using Fusion.Sockets;
@@ -102,6 +103,11 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public string LocalPlayerName { get; private set; } = "Player";
     public string OpponentName { get; private set; }
     public int OpponentAvatarIndex { get; private set; } = -1;
+    public string OpponentAvatarUrl { get; private set; }
+    public Sprite OpponentAvatarSprite { get; private set; }
+    private Sprite rematchOpponentAvatarSprite;
+    private Coroutine opponentAvatarRoutine;
+    private string loadedOpponentAvatarUrl;
     public int OpponentProfileLevel { get; private set; } = 1;
     public bool RematchRequestedLocal { get; private set; }
     public bool RematchRequestedRemote { get; private set; }
@@ -604,6 +610,16 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         var local = NetworkSudokuPlayer.Local;
         if (local != null && local.HasStateAuthority)
             local.PlayerName = LocalPlayerName;
+
+        BroadcastIdentity();
+    }
+
+    public void RefreshLocalIdentity()
+    {
+        if (ProfileManager.Instance != null && !string.IsNullOrWhiteSpace(ProfileManager.Instance.PlayerName))
+            SetLocalPlayerName(ProfileManager.Instance.PlayerName);
+        else
+            BroadcastIdentity();
     }
 
     private void RefreshLocalPlayerName()
@@ -1045,7 +1061,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         int avatar = ProfileManager.Instance != null ? ProfileManager.Instance.AvatarPresetIndex : -1;
         int level = ProfileManager.Instance != null ? ProfileManager.Instance.ProfileLevel : 1;
-        string payload = LocalPlayerName + "\n" + avatar + "\n" + level;
+        string avatarUrl = ProfileManager.Instance != null ? ProfileManager.Instance.AvatarUrl : null;
+        if (string.IsNullOrEmpty(avatarUrl)) avatarUrl = "";
+        else avatar = -1;
+        string payload = LocalPlayerName + "\n" + avatar + "\n" + level + "\n" + avatarUrl;
         SendToOthers(IdentityKey, Encoding.UTF8.GetBytes(payload));
     }
 
@@ -1094,6 +1113,14 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         OpponentName = null;
         OpponentAvatarIndex = -1;
+        OpponentAvatarUrl = null;
+        OpponentAvatarSprite = null;
+        loadedOpponentAvatarUrl = null;
+        if (opponentAvatarRoutine != null)
+        {
+            StopCoroutine(opponentAvatarRoutine);
+            opponentAvatarRoutine = null;
+        }
         OpponentProfileLevel = 1;
         OpponentElapsedSeconds = 0f;
         OpponentLiveScore = 0;
@@ -1263,6 +1290,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             RematchOpponentName = OpponentName;
         if (OpponentAvatarIndex >= 0)
             RematchOpponentAvatar = OpponentAvatarIndex;
+        if (OpponentAvatarSprite != null)
+            rematchOpponentAvatarSprite = OpponentAvatarSprite;
     }
 
     public void LoadRematchLobby()
@@ -1277,8 +1306,57 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public Sprite GetOpponentAvatar()
     {
+        if (OpponentAvatarSprite != null) return OpponentAvatarSprite;
+        if (!string.IsNullOrEmpty(OpponentAvatarUrl))
+            return null;
+        if (rematchOpponentAvatarSprite != null) return rematchOpponentAvatarSprite;
         if (ProfileManager.Instance == null) return null;
-        return ProfileManager.Instance.GetPresetAvatar(OpponentAvatarIndex);
+        int index = OpponentAvatarIndex >= 0 ? OpponentAvatarIndex : RematchOpponentAvatar;
+        return ProfileManager.Instance.GetPresetAvatar(index);
+    }
+
+    private void BeginOpponentAvatarDownload(string url)
+    {
+        if (string.IsNullOrEmpty(url))
+        {
+            OpponentAvatarSprite = null;
+            loadedOpponentAvatarUrl = null;
+            return;
+        }
+
+        if (url == loadedOpponentAvatarUrl && OpponentAvatarSprite != null)
+            return;
+
+        if (opponentAvatarRoutine != null)
+            StopCoroutine(opponentAvatarRoutine);
+        opponentAvatarRoutine = StartCoroutine(DownloadOpponentAvatar(url));
+    }
+
+    private IEnumerator DownloadOpponentAvatar(string url)
+    {
+        using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(url))
+        {
+            yield return request.SendWebRequest();
+            opponentAvatarRoutine = null;
+            if (url != OpponentAvatarUrl)
+                yield break;
+            if (request.result != UnityWebRequest.Result.Success)
+            {
+                Debug.LogWarning("[MultiplayerManager] Opponent photo download failed: " + request.error);
+                yield break;
+            }
+
+            Texture2D texture = DownloadHandlerTexture.GetContent(request);
+            if (texture == null)
+                yield break;
+
+            OpponentAvatarSprite = Sprite.Create(
+                texture,
+                new Rect(0, 0, texture.width, texture.height),
+                new Vector2(0.5f, 0.5f));
+            loadedOpponentAvatarUrl = url;
+            OnOpponentIdentity?.Invoke();
+        }
     }
 
     private IEnumerator ConfigureRoomSoon()
@@ -1474,7 +1552,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 }
             }
             if (parts.Length > 1 && int.TryParse(parts[1], out int avatarIndex) && avatarIndex >= -1 && avatarIndex < 64)
-                OpponentAvatarIndex = avatarIndex;
+            {
+                if (OpponentAvatarIndex != avatarIndex)
+                {
+                    OpponentAvatarIndex = avatarIndex;
+                    changed = true;
+                }
+            }
+            if (parts.Length > 3)
+            {
+                string url = parts[3].Trim();
+                if (!string.Equals(OpponentAvatarUrl, url, StringComparison.Ordinal))
+                {
+                    OpponentAvatarUrl = url;
+                    changed = true;
+                    BeginOpponentAvatarDownload(url);
+                }
+            }
             if (parts.Length > 2 && int.TryParse(parts[2], out int profileLevel) && IsSaneProfileLevel(profileLevel))
             {
                 // Keep the level that was announced. A later packet may record a

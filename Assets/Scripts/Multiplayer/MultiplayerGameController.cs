@@ -522,6 +522,18 @@ public class MultiplayerGameController : MonoBehaviour
         _resultShown = true;
         gameStarted = false;
 
+        if (gameManager != null)
+            gameManager.RecordCompletedMatch(isWinner);
+        else if (isWinner)
+        {
+            UIManager.Difficulty difficulty = MultiplayerManager.Instance != null
+                ? MultiplayerManager.Instance.MatchDifficulty
+                : UIManager.Difficulty.Easy;
+            ProfileManager.Instance?.RecordVictory(difficulty, 0);
+        }
+        else
+            ProfileManager.Instance?.RecordLoss();
+
         var mp = MultiplayerManager.Instance;
         mp?.CaptureResultSnapshot();
 

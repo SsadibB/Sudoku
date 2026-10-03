@@ -1,4 +1,5 @@
 using System;
+using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 
@@ -20,6 +21,13 @@ namespace SadibTools.AuthLogin
             _instance = host.GetComponent<AuthMainThread>();
             if (_instance == null)
                 _instance = host.AddComponent<AuthMainThread>();
+        }
+
+        public static Coroutine Run(IEnumerator routine)
+        {
+            if (routine == null || _instance == null)
+                return null;
+            return _instance.StartCoroutine(routine);
         }
 
         public static void Post(Action action)

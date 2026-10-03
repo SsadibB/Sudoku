@@ -26,6 +26,9 @@ namespace SadibTools.AuthLogin
 
         public bool IsSignedIn => CurrentSession != null;
         public bool IsBusy { get; private set; }
+        /// <summary>True while a silent startup sign-in is the attempt currently in flight.</summary>
+        public bool IsSilentSignIn => IsBusy && _silentInProgress;
+        public bool LastSignInWasExplicit { get; private set; }
         public AuthSession CurrentSession { get; private set; }
         public string LastPlayFabId => CurrentSession?.PlayFabId;
         public string LastProviderId => CurrentSession?.ProviderId;
@@ -50,6 +53,9 @@ namespace SadibTools.AuthLogin
         private GoogleAuthProvider _google;
         private FacebookAuthProvider _facebook;
         private FacebookAuthProvider _instagram;
+        private IAuthProvider _activeProvider;
+        private int _signInGeneration;
+        private bool _silentInProgress;
 
         public static AuthManager EnsureInstance()
         {
@@ -146,13 +152,31 @@ namespace SadibTools.AuthLogin
         /// <summary>Inspector On Click(): Sign out from Google.</summary>
         public void SignOutGoogle()
         {
-            _google?.SignOut();
-            if (CurrentSession != null && string.Equals(CurrentSession.ProviderId, GoogleAuthProvider.Id, StringComparison.OrdinalIgnoreCase))
-            {
+            SignOutProvider(_google, GoogleAuthProvider.Id, notify: true);
+        }
+
+        private void SignOutOthers(string keepProviderId)
+        {
+            if (!string.Equals(keepProviderId, GoogleAuthProvider.Id, StringComparison.OrdinalIgnoreCase))
+                SignOutProvider(_google, GoogleAuthProvider.Id, notify: true);
+            if (!string.Equals(keepProviderId, FacebookAuthProvider.FacebookId, StringComparison.OrdinalIgnoreCase))
+                SignOutProvider(_facebook, FacebookAuthProvider.FacebookId, notify: true);
+            if (!string.Equals(keepProviderId, FacebookAuthProvider.InstagramId, StringComparison.OrdinalIgnoreCase))
+                SignOutProvider(_instagram, FacebookAuthProvider.InstagramId, notify: true);
+        }
+
+        private void SignOutProvider(IAuthProvider provider, string providerId, bool notify)
+        {
+            if (provider == null || !provider.IsSignedIn)
+                return;
+
+            provider.SignOut();
+            if (CurrentSession != null && string.Equals(CurrentSession.ProviderId, providerId, StringComparison.OrdinalIgnoreCase))
                 CurrentSession = null;
-            }
-            Debug.Log("[AuthManager] Signed out from Google.");
-            OnSignedOut?.Invoke(GoogleAuthProvider.Id);
+
+            Debug.Log("[AuthManager] Signed out from " + providerId + ".");
+            if (notify)
+                OnSignedOut?.Invoke(providerId);
         }
 
         /// <summary>Inspector On Click(): Sign out from Facebook.</summary>
@@ -194,13 +218,28 @@ namespace SadibTools.AuthLogin
         /// <summary>Inspector On Click(): Sign out from all providers.</summary>
         public void SignOut()
         {
+            CancelInFlightSignIn();
             _google?.SignOut();
             _facebook?.SignOut();
             _instagram?.SignOut();
-            IsBusy = false;
             CurrentSession = null;
             Debug.Log("[AuthManager] Signed out from all providers.");
             OnSignedOut?.Invoke("all");
+        }
+
+        /// <summary>
+        /// Drops an in-flight attempt so a late callback cannot finish it
+        /// or block the next login. A connected account is left for the caller to sign out.
+        /// </summary>
+        private void CancelInFlightSignIn()
+        {
+            IAuthProvider active = _activeProvider;
+            _signInGeneration++;
+            _silentInProgress = false;
+            IsBusy = false;
+            _activeProvider = null;
+            if (active != null && !active.IsSignedIn)
+                active.SignOut();
         }
 
         private void SignIn(IAuthProvider provider, bool silent)
@@ -213,35 +252,68 @@ namespace SadibTools.AuthLogin
 
             if (IsBusy)
             {
-                if (!silent)
-                    OnLoginFailure?.Invoke(AuthError.InProgress(provider.ProviderId));
-                return;
+                // A silent startup attempt must not block the account button.
+                // Any other in-flight attempt (double click or a second button listener)
+                // is ignored until it completes, fails, or is cancelled.
+                if (silent || !_silentInProgress)
+                    return;
+
+                CancelInFlightSignIn();
             }
 
-            if (provider.IsSignedIn && CurrentSession != null)
+            if (provider.IsSignedIn && CurrentSession != null
+                && string.Equals(CurrentSession.ProviderId, provider.ProviderId, StringComparison.OrdinalIgnoreCase))
             {
+                LastSignInWasExplicit = false;
                 OnLoginSuccess?.Invoke(CurrentSession);
                 return;
             }
 
+            // A player can connect only one account. An explicit sign-in replaces the others.
+            int generation = ++_signInGeneration;
+            _silentInProgress = silent;
+            _activeProvider = provider;
+            LastSignInWasExplicit = !silent;
+            if (!silent)
+                SignOutOthers(provider.ProviderId);
+
             IsBusy = true;
-            OnLoginStarted?.Invoke(provider.ProviderId);
+            if (!silent)
+                OnLoginStarted?.Invoke(provider.ProviderId);
             provider.SignIn(
                 silent,
                 onSuccess: result =>
                 {
+                    if (generation != _signInGeneration)
+                        return;
+
                     IsBusy = false;
-                    CurrentSession = AuthSession.FromLogin(provider.ProviderId, result);
+                    _silentInProgress = false;
+                    _activeProvider = null;
+                    string displayName = null;
+                    string photoUrl = null;
+                    if (provider is IAccountProfile account)
+                    {
+                        displayName = account.AccountDisplayName;
+                        photoUrl = account.AccountPhotoUrl;
+                    }
+
+                    CurrentSession = AuthSession.FromLogin(provider.ProviderId, result, displayName, photoUrl);
                     Debug.Log($"[AuthManager] Login OK via {provider.ProviderId}. PlayFabId={result.PlayFabId} NewAccount={result.NewlyCreated}");
                     OnLoginSuccess?.Invoke(CurrentSession);
                 },
                 onFailure: error =>
                 {
+                    if (generation != _signInGeneration)
+                        return;
+
                     IsBusy = false;
-                    bool hideSilentCancel = silent && error.Code == AuthErrorCode.Cancelled;
+                    _silentInProgress = false;
+                    _activeProvider = null;
+                    bool hideSilentCancel = silent && error != null && error.Code == AuthErrorCode.Cancelled;
                     if (!hideSilentCancel)
                     {
-                        if (error.Code != AuthErrorCode.Cancelled && error.Code != AuthErrorCode.UnsupportedPlatform)
+                        if (error != null && error.Code != AuthErrorCode.Cancelled && error.Code != AuthErrorCode.UnsupportedPlatform)
                             Debug.LogError($"[AuthManager] {error}");
                         OnLoginFailure?.Invoke(error);
                     }
