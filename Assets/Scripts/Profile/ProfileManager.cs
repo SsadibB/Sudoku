@@ -1,5 +1,6 @@
 using System.Collections;
 using System.IO;
+using System.Text.RegularExpressions;
 using SadibTools.AuthLogin;
 using TMPro;
 using UnityEngine;
@@ -918,6 +919,16 @@ public class ProfileManager : MonoBehaviour
         image.preserveAspect = false;
     }
 
+    /// <summary>
+    /// Google account photos are often requested at 96 pixels. Ask for a size
+    /// that stays sharp when drawn in the profile and match portraits.
+    /// </summary>
+    public static string HighResolutionPhotoUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url)) return url;
+        return Regex.Replace(url, @"=s\d+(-c)?", "=s1024-c", RegexOptions.IgnoreCase);
+    }
+
     private void HandleAccountLogin(AuthSession session)
     {
         if (session == null) return;
@@ -945,12 +956,12 @@ public class ProfileManager : MonoBehaviour
             return;
         }
 
-        AvatarUrl = session.PhotoUrl;
-        PlayerPrefs.SetString(AccountPhotoUrlKey, session.PhotoUrl);
+        AvatarUrl = HighResolutionPhotoUrl(session.PhotoUrl);
+        PlayerPrefs.SetString(AccountPhotoUrlKey, AvatarUrl);
         PlayerPrefs.Save();
         if (accountAvatarRoutine != null)
             StopCoroutine(accountAvatarRoutine);
-        accountAvatarRoutine = StartCoroutine(DownloadAccountAvatar(session.PhotoUrl));
+        accountAvatarRoutine = StartCoroutine(DownloadAccountAvatar(AvatarUrl));
     }
 
     private void HandleAccountLogout(string providerId)
@@ -987,11 +998,15 @@ public class ProfileManager : MonoBehaviour
                 yield break;
             }
 
-            Texture2D texture = DownloadHandlerTexture.GetContent(request);
-            if (texture == null)
+            Texture2D downloaded = DownloadHandlerTexture.GetContent(request);
+            // The web request destroys its texture when it is disposed. Keep a
+            // copy so the portrait still exists when the match scene loads and
+            // so it can be sent to the other player.
+            Texture2D owned = CopyOwnedTexture(downloaded) ?? downloaded;
+            if (owned == null)
                 yield break;
 
-            ApplySprite(SpriteFromTexture(texture));
+            ApplySprite(SpriteFromTexture(owned));
             MultiplayerManager.Instance?.RefreshLocalIdentity();
         }
     }
@@ -1011,6 +1026,10 @@ public class ProfileManager : MonoBehaviour
     public static Image ApplyCircularMask(Image source)
     {
         if (source == null) return null;
+        // OpponentAvatarImage already has its mask in the scene. Never build
+        // another Circle Mask or Avatar Image under it.
+        if (source.gameObject.name == "OpponentAvatarImage")
+            return source;
         if (source.transform.parent != null && source.transform.parent.name == "Circle Mask")
             return source;
 
@@ -1113,7 +1132,7 @@ public class ProfileManager : MonoBehaviour
         string accountUrl = PlayerPrefs.GetString(AccountPhotoUrlKey, "");
         if (!string.IsNullOrWhiteSpace(accountUrl))
         {
-            AvatarUrl = accountUrl.Trim();
+            AvatarUrl = HighResolutionPhotoUrl(accountUrl.Trim());
             if (accountAvatarRoutine != null)
                 StopCoroutine(accountAvatarRoutine);
             accountAvatarRoutine = StartCoroutine(DownloadAccountAvatar(AvatarUrl));
@@ -1152,11 +1171,32 @@ public class ProfileManager : MonoBehaviour
 
     private static Sprite SpriteFromTexture(Texture2D texture)
     {
-        return Sprite.Create(
+        texture.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        Sprite sprite = Sprite.Create(
             texture,
             new Rect(0, 0, texture.width, texture.height),
             new Vector2(0.5f, 0.5f)
         );
+        sprite.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        return sprite;
+    }
+
+    private static Texture2D CopyOwnedTexture(Texture2D source)
+    {
+        if (source == null) return null;
+        try
+        {
+            Texture2D copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+            copy.SetPixels(source.GetPixels());
+            copy.Apply(false, false);
+            copy.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            return copy;
+        }
+        catch (System.Exception ex)
+        {
+            Debug.LogWarning("[ProfileManager] Account photo copy skipped: " + ex.Message);
+            return null;
+        }
     }
 
     // ==================== Profile Level / XP ====================

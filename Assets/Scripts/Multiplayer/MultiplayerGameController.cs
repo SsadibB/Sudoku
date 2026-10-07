@@ -1,5 +1,6 @@
 using System.Collections;
 using UnityEngine;
+using UnityEngine.SceneManagement;
 using UnityEngine.UI;
 using TMPro;
 using Fusion;
@@ -18,6 +19,7 @@ public class MultiplayerGameController : MonoBehaviour
     [SerializeField] private MultiplayerResultPanel resultPanel;
     [SerializeField] private OpponentBoardPanel opponentBoardPanel;
     [SerializeField] private Button boardButton;
+    [SerializeField] private Image OpponentAvatarImage;
 
     // Injected at game start
     private SudokuGameManager gameManager;
@@ -27,7 +29,6 @@ public class MultiplayerGameController : MonoBehaviour
     private float gameStartTime;
     private float _nextSpawnAttempt;
     private bool _matchInitDone;
-    private Coroutine _awayWait;
     private NetworkSudokuPlayer _boundLocal;
     private bool _resultShown;
     private int _remoteHeartsSeen;
@@ -56,6 +57,8 @@ public class MultiplayerGameController : MonoBehaviour
         }
 
         BindMatchHud(isMultiplayer);
+        if (isMultiplayer)
+            TransferCachedOpponentAvatar(true);
 
         if (opponentBoardPanel != null && boardButton != null)
         {
@@ -89,6 +92,7 @@ public class MultiplayerGameController : MonoBehaviour
 
         // Listen for opponent leaving or forfeiting
         MultiplayerManager.Instance.OnOpponentLeft += HandleOpponentLeft;
+        MultiplayerManager.Instance.OnLocalSessionLost += HandleLocalSessionLost;
         MultiplayerManager.Instance.OnOpponentOutOfLives += HandleOpponentOutOfLives;
         NetworkSudokuPlayer.OnPlayerForfeited += HandlePlayerForfeited;
 
@@ -116,6 +120,7 @@ public class MultiplayerGameController : MonoBehaviour
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentLeft;
+            MultiplayerManager.Instance.OnLocalSessionLost -= HandleLocalSessionLost;
             MultiplayerManager.Instance.OnOpponentOutOfLives -= HandleOpponentOutOfLives;
         }
 
@@ -389,70 +394,29 @@ public class MultiplayerGameController : MonoBehaviour
     private void HandleOpponentLeft()
     {
         if (isOpponentLeftHandled) return;
+        var mp = MultiplayerManager.Instance;
+        if (mp != null && mp.SuppressOpponentLeft) return;
 
-        var remote = ResolveRemote();
-        bool forfeited = false;
-        if (remote != null && remote.Object != null && remote.Object.IsValid)
+        // The match never started. Leave the board instead of playing on alone.
+        if (mp == null || !mp.MatchClockArmed)
         {
-            try { forfeited = remote.HasForfeited; }
-            catch { forfeited = false; }
-        }
-        if (forfeited)
-        {
-            ConcludeOpponentGone();
+            isOpponentLeftHandled = true;
+            gameStarted = false;
+            if (mp != null && mp.IsInSession)
+                mp.Disconnect();
+            SceneManager.LoadScene("MainMenu");
             return;
         }
 
-        // Screen-off and a dropped socket are not a finished game.
-        // Wait for them to return, or for an explicit forfeit.
-        if (_awayWait == null)
-            _awayWait = StartCoroutine(WaitForAwayOpponent());
+        ConcludeOpponentGone();
     }
 
-    private IEnumerator WaitForAwayOpponent()
+    private void HandleLocalSessionLost()
     {
-        // A dropped connection without a screen-off notice can still be a
-        // brief network blip. A known screen-off is allowed to last much longer.
-        float goneDeadline = Time.realtimeSinceStartup + 180f;
-        float awayDeadline = Time.realtimeSinceStartup + 600f;
-        while (Time.realtimeSinceStartup < awayDeadline)
-        {
-            if (isOpponentLeftHandled)
-            {
-                _awayWait = null;
-                yield break;
-            }
-
-            var remote = ResolveRemote();
-            var mp = MultiplayerManager.Instance;
-            bool theyAreAway = mp != null && mp.OpponentBackgrounded;
-            bool theyAreHere = remote != null && remote.Object != null && remote.Object.IsValid;
-            if (theyAreHere)
-            {
-                bool stillForfeited = false;
-                try { stillForfeited = remote.HasForfeited; }
-                catch { stillForfeited = false; }
-                if (stillForfeited)
-                    break;
-
-                if (!theyAreAway)
-                {
-                    _awayWait = null;
-                    yield break;
-                }
-            }
-
-            if (theyAreAway)
-                goneDeadline = Time.realtimeSinceStartup + 180f;
-            else if (!theyAreHere && Time.realtimeSinceStartup >= goneDeadline)
-                break;
-
-            yield return null;
-        }
-
-        _awayWait = null;
-        if (!isOpponentLeftHandled)
-            ConcludeOpponentGone();
+        if (isOpponentLeftHandled || _resultShown) return;
+        isOpponentLeftHandled = true;
+        gameStarted = false;
+        SceneManager.LoadScene("MainMenu");
     }
 
     private void ConcludeOpponentGone()
@@ -460,11 +424,6 @@ public class MultiplayerGameController : MonoBehaviour
         if (isOpponentLeftHandled) return;
         isOpponentLeftHandled = true;
         gameStarted = false;
-        if (_awayWait != null)
-        {
-            StopCoroutine(_awayWait);
-            _awayWait = null;
-        }
 
         ShowResult(isWinner: true, CurrentElapsed());
     }
@@ -786,11 +745,17 @@ public class MultiplayerGameController : MonoBehaviour
         int remoteLives = frozen
             ? mp.SnapshotRemoteLives
             : Mathf.Max(0, remote != null ? remote.HalfHearts : (mp != null ? mp.OpponentLiveHalfHearts : 0)) / 2;
-        Sprite remoteAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        if (remoteAvatar == null && remote != null && ProfileManager.Instance != null
-            && string.IsNullOrEmpty(mp != null ? mp.OpponentAvatarUrl : null)
-            && remote.AvatarIndex >= 0)
+        Sprite remoteAvatar = mp != null ? mp.OpponentAvatarSprite : null;
+        if (remoteAvatar == null && mp != null)
+            remoteAvatar = mp.GetOpponentAvatar();
+        bool accountPhoto = remoteAvatar != null || (mp != null && (!string.IsNullOrEmpty(mp.OpponentAvatarUrl) || mp.OpponentAvatarIndex < 0));
+        if (remoteAvatar == null && !accountPhoto && remote != null && ProfileManager.Instance != null && remote.AvatarIndex >= 0)
             remoteAvatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
+        if (mp != null && mp.OpponentAvatarSprite != null)
+            remoteAvatar = mp.OpponentAvatarSprite;
+
+        if (remoteAvatar != null)
+            TransferCachedOpponentAvatar(false);
 
         if (opponentSide != null)
             ApplySide(opponentSide, remoteName, remoteLevel, remoteScore, remoteTime, remoteLives, remoteAvatar, true);
@@ -878,10 +843,93 @@ public class MultiplayerGameController : MonoBehaviour
         }
     }
 
-    private static void ApplyCircularAvatar(Transform side, Sprite avatar, bool hideUntilReady)
+    private bool _loggedOpponentAvatarTransfer;
+
+    /// <summary>
+    /// Copies the sprite already shown in SearchingGroup or HostWaitGroup onto the
+    /// gameplay OpponentAvatarImage. Does not download or create any UI.
+    /// </summary>
+    public void TransferCachedOpponentAvatar(bool log)
     {
-        Transform avatarRoot = FindChild(side, "Avatar");
-        if (avatarRoot == null) return;
+        var mp = MultiplayerManager.Instance;
+        Sprite cachedOpponentAvatarSprite = mp != null ? mp.OpponentAvatarSprite : null;
+        if ((cachedOpponentAvatarSprite == null || MultiplayerManager.IsPlaceholderAvatar(cachedOpponentAvatarSprite)) && mp != null)
+        {
+            Sprite displayed = mp.GetOpponentAvatar();
+            if (displayed != null && !MultiplayerManager.IsPlaceholderAvatar(displayed))
+                cachedOpponentAvatarSprite = displayed;
+        }
+
+        ResolveGameplayOpponentAvatarImage();
+
+        if (log && !_loggedOpponentAvatarTransfer)
+        {
+            Debug.Log($"Opponent avatar cached: {cachedOpponentAvatarSprite != null}");
+            Debug.Log($"Gameplay OpponentAvatarImage: {OpponentAvatarImage != null}");
+        }
+
+        if (OpponentAvatarImage != null && cachedOpponentAvatarSprite != null)
+            MultiplayerManager.AssignExistingOpponentImage(OpponentAvatarImage, cachedOpponentAvatarSprite);
+
+        if (log && !_loggedOpponentAvatarTransfer)
+        {
+            Debug.Log($"Gameplay opponent avatar assigned: {OpponentAvatarImage != null && OpponentAvatarImage.sprite != null}");
+            _loggedOpponentAvatarTransfer = true;
+        }
+    }
+
+    private void ResolveGameplayOpponentAvatarImage()
+    {
+        if (OpponentAvatarImage != null && OpponentAvatarImage.gameObject.scene.IsValid()
+            && OpponentAvatarImage.gameObject.scene.name == "GameScene")
+            return;
+
+        Image[] images = Resources.FindObjectsOfTypeAll<Image>();
+        for (int i = 0; i < images.Length; i++)
+        {
+            Image image = images[i];
+            if (image == null || image.gameObject.name != "OpponentAvatarImage") continue;
+            if (!image.gameObject.scene.IsValid() || image.gameObject.scene.name != "GameScene") continue;
+            Transform cursor = image.transform;
+            bool lobby = false;
+            while (cursor != null)
+            {
+                if (cursor.name == "SearchingGroup" || cursor.name == "HostWaitGroup")
+                {
+                    lobby = true;
+                    break;
+                }
+                cursor = cursor.parent;
+            }
+            if (lobby) continue;
+            OpponentAvatarImage = image;
+            return;
+        }
+    }
+
+    private static void ApplyCircularAvatar(Transform side, Sprite avatar, bool opponentSlot)
+    {
+        if (opponentSlot)
+        {
+            Transform named = FindChild(side, "OpponentAvatarImage");
+            Image image = named != null ? named.GetComponent<Image>() : null;
+            if (image == null)
+            {
+                Transform avatarRoot = FindChild(side, "Avatar");
+                if (avatarRoot != null)
+                    image = avatarRoot.GetComponent<Image>();
+            }
+            if (avatar != null)
+                MultiplayerManager.AssignExistingOpponentImage(image, avatar);
+            return;
+        }
+
+        AssignLocalPortrait(FindChild(side, "Avatar"), avatar);
+    }
+
+    private static void AssignLocalPortrait(Transform avatarRoot, Sprite avatar)
+    {
+        if (avatarRoot == null || avatar == null) return;
 
         Image image = avatarRoot.GetComponent<Image>();
         if (image == null)
@@ -889,23 +937,8 @@ public class MultiplayerGameController : MonoBehaviour
         image = ProfileManager.ApplyCircularMask(image);
         if (image == null) return;
 
-        image.gameObject.SetActive(true);
-        if (image.transform.parent != null)
-            image.transform.parent.gameObject.SetActive(true);
-
-        if (avatar != null)
-        {
-            image.sprite = avatar;
-            image.color = Color.white;
-            image.enabled = true;
-            image.preserveAspect = false;
-            return;
-        }
-
-        if (!hideUntilReady) return;
-
-        image.sprite = null;
-        image.color = new Color(1f, 1f, 1f, 0f);
+        image.sprite = avatar;
+        image.color = Color.white;
         image.enabled = true;
     }
 

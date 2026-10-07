@@ -282,22 +282,16 @@ public class OpponentBoardPanel : MonoBehaviour
 
         Sprite avatar = null;
         var mp = MultiplayerManager.Instance;
-        bool accountPhoto = mp != null && (!string.IsNullOrEmpty(mp.OpponentAvatarUrl) || mp.OpponentAvatarSprite != null);
-        if (accountPhoto)
+        bool accountPhoto = mp != null && (mp.OpponentAvatarSprite != null || !string.IsNullOrEmpty(mp.OpponentAvatarUrl));
+        if (mp != null)
             avatar = mp.GetOpponentAvatar();
-        else if (remote != null && ProfileManager.Instance != null)
+        if (avatar == null && !accountPhoto && remote != null && ProfileManager.Instance != null && remote.AvatarIndex >= 0)
             avatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
-        if (avatar == null && mp != null)
-            avatar = mp.GetOpponentAvatar();
+        if (mp != null && avatar != null)
+            mp.PaintOpponentAvatars();
 
-        opponentAvatarImage = ProfileManager.ApplyCircularMask(opponentAvatarImage);
         if (opponentAvatarImage != null && avatar != null)
-        {
-            opponentAvatarImage.sprite = avatar;
-            opponentAvatarImage.color = Color.white;
-            opponentAvatarImage.enabled = true;
-            opponentAvatarImage.preserveAspect = false;
-        }
+            MultiplayerManager.AssignExistingOpponentImage(opponentAvatarImage, avatar);
     }
 
     private void EnsureOpponentHeader()
@@ -333,27 +327,13 @@ public class OpponentBoardPanel : MonoBehaviour
 
         if (opponentAvatarImage == null)
         {
-            Transform existing = panelRoot.transform.Find("OpponentAvatar");
+            Transform existing = panelRoot.transform.Find("OpponentAvatarImage");
+            if (existing == null)
+                existing = panelRoot.transform.Find("OpponentAvatar");
             if (existing == null && opponentNameText != null)
-                existing = opponentNameText.transform.parent.Find("OpponentAvatar");
-            if (existing == null && opponentNameText != null)
-            {
-                var go = new GameObject("OpponentAvatar", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-                go.transform.SetParent(opponentNameText.transform.parent, false);
-                var rt = go.GetComponent<RectTransform>();
-                rt.anchorMin = new Vector2(0.5f, 0.5f);
-                rt.anchorMax = new Vector2(0.5f, 0.5f);
-                rt.sizeDelta = new Vector2(72f, 72f);
-                rt.anchoredPosition = opponentNameText.rectTransform.anchoredPosition + new Vector2(-120f, 0f);
-                var image = go.GetComponent<Image>();
-                image.preserveAspect = true;
-                image.raycastTarget = false;
-                opponentAvatarImage = image;
-            }
-            else if (existing != null)
-            {
+                existing = opponentNameText.transform.parent.Find("OpponentAvatarImage");
+            if (existing != null)
                 opponentAvatarImage = existing.GetComponent<Image>();
-            }
         }
 
         var hearts = FindAnyObjectByType<HeartManager>();

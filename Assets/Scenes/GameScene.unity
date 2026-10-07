@@ -2376,7 +2376,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 489.49573, y: -55.978504}
+  m_AnchoredPosition: {x: 489.49573, y: -55.9785}
   m_SizeDelta: {x: 978.99146, y: 111.95701}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &243202981
@@ -4799,14 +4799,17 @@ MonoBehaviour:
   levelHeaderText: {fileID: 0}
   hudScoreText: {fileID: 1010928815}
   hudTimeText: {fileID: 1266350614}
+  loadingPanel: {fileID: 0}
+  loadingFill: {fileID: 0}
+  loadingDuration: 1.7
+  revivePanel: {fileID: 0}
+  reviveButton: {fileID: 0}
+  reviveCancelButton: {fileID: 0}
   scorePerCorrectNumber: 5
   scorePerRowComplete: 10
   scorePerColumnComplete: 10
   scorePerBoxComplete: 20
   scorePerBoardComplete: 200
-  profileXPEasy: 20
-  profileXPMedium: 40
-  profileXPHard: 80
 --- !u!1 &482988786
 GameObject:
   m_ObjectHideFlags: 0
@@ -12002,6 +12005,8 @@ MonoBehaviour:
   boardButtonTransform: {fileID: 0}
   gridParent: {fileID: 283092025}
   opponentNameText: {fileID: 1387941322}
+  opponentLevelText: {fileID: 0}
+  opponentAvatarImage: {fileID: 0}
   opponentProgressText: {fileID: 540161647}
   opponentScoreText: {fileID: 682518769}
   opponentLivesText: {fileID: 0}
@@ -19596,7 +19601,7 @@ GameObject:
   - component: {fileID: 1553740952}
   - component: {fileID: 1553740951}
   m_Layer: 5
-  m_Name: Avatar
+  m_Name: OpponentAvatarImage
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -19691,6 +19696,7 @@ MonoBehaviour:
   resultPanel: {fileID: 519423256}
   opponentBoardPanel: {fileID: 967891893}
   boardButton: {fileID: 0}
+  OpponentAvatarImage: {fileID: 1553740951}
   networkPlayerPrefab: {fileID: 3684215293905749020, guid: 4c237a6d8e82bc042bbbc9d294017267, type: 3}
 --- !u!4 &1560625562
 Transform:

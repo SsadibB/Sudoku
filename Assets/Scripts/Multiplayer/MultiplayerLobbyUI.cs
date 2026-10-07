@@ -51,9 +51,19 @@ public class MultiplayerLobbyUI : MonoBehaviour
     private SearchContext searchContext = SearchContext.None;
     private Coroutine autoStartCoroutine;
     private bool opponentFound;
+    private bool eventsBound;
 
     private void Awake()
     {
+        // The lobby panel carries a second copy of this component. Both were
+        // listening to the same difficulty buttons, so one search started twice
+        // and the second call was dropped as "already starting".
+        if (Instance != null && Instance != this)
+        {
+            Destroy(this);
+            return;
+        }
+
         Instance = this;
         EnsureReferences();
 
@@ -87,31 +97,42 @@ public class MultiplayerLobbyUI : MonoBehaviour
 
     private void OnEnable()
     {
+        if (Instance != null && Instance != this) return;
+        if (eventsBound) return;
+
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnMatchmakingTimeout += OnMatchmakingTimeout;
             MultiplayerManager.Instance.OnConnectionFailed += OnConnectionFailed;
             MultiplayerManager.Instance.OnOpponentJoined += OnOpponentJoined;
+            MultiplayerManager.Instance.OnOpponentLeft += HandleOpponentDeparted;
+            MultiplayerManager.Instance.OnLocalSessionLost += HandleLocalSessionLost;
             MultiplayerManager.Instance.OnOpponentIdentity += RefreshOpponentIdentity;
             MultiplayerManager.Instance.OnRematchStateChanged += RefreshRematchState;
         }
 
         if (ProfileManager.Instance != null)
             ProfileManager.Instance.OnLocalIdentityChanged += RefreshLocalSearchIdentity;
+        eventsBound = true;
     }
 
     private void OnDisable()
     {
+        if (!eventsBound) return;
+
         if (MultiplayerManager.Instance != null)
         {
             MultiplayerManager.Instance.OnMatchmakingTimeout -= OnMatchmakingTimeout;
             MultiplayerManager.Instance.OnConnectionFailed -= OnConnectionFailed;
             MultiplayerManager.Instance.OnOpponentJoined -= OnOpponentJoined;
+            MultiplayerManager.Instance.OnOpponentLeft -= HandleOpponentDeparted;
+            MultiplayerManager.Instance.OnLocalSessionLost -= HandleLocalSessionLost;
             MultiplayerManager.Instance.OnOpponentIdentity -= RefreshOpponentIdentity;
             MultiplayerManager.Instance.OnRematchStateChanged -= RefreshRematchState;
         }
         if (ProfileManager.Instance != null)
             ProfileManager.Instance.OnLocalIdentityChanged -= RefreshLocalSearchIdentity;
+        eventsBound = false;
         StopSpinner();
         CancelAutoStart();
     }
@@ -258,6 +279,8 @@ public class MultiplayerLobbyUI : MonoBehaviour
         if (searchContext == SearchContext.Competition)
         {
             SetStartGameVisible(false);
+            if (opponentFound && searchingGroup != null && searchingGroup.activeInHierarchy)
+                ApplyFoundPlayers();
             return;
         }
 
@@ -354,6 +377,8 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         SoundManager.Instance?.PlaySFX("Button");
         if (!IsLocalHost()) return;
+        if (MultiplayerManager.Instance != null && !MultiplayerManager.Instance.OpponentStillConnected())
+            return;
         if (startGameButton != null) startGameButton.interactable = false;
         CancelAutoStart();
         MultiplayerManager.Instance?.HostStartMatch();
@@ -363,6 +388,26 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         if (searchContext == SearchContext.None) return;
         PresentOpponentFound();
+    }
+
+    private void HandleOpponentDeparted()
+    {
+        if (searchContext == SearchContext.None || !opponentFound) return;
+        CancelAutoStart();
+        opponentFound = false;
+        SetStartGameVisible(false);
+        if (searchingStatusText != null)
+            searchingStatusText.text = "Opponent disconnected";
+    }
+
+    private void HandleLocalSessionLost()
+    {
+        CancelAutoStart();
+        StopSpinner();
+        searchVisuals?.Stop();
+        opponentFound = false;
+        if (searchingStatusText != null)
+            searchingStatusText.text = "Connection lost";
     }
 
     private void RefreshOpponentIdentity()
@@ -453,10 +498,14 @@ public class MultiplayerLobbyUI : MonoBehaviour
         if (!IsDisplayName(opponentName) && mp != null)
             opponentName = mp.RematchOpponentName;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
-        if (opponentAvatar == null && mp != null && mp.RematchOpponentAvatar >= 0 && ProfileManager.Instance != null)
+        bool waitingForPhoto = mp != null && opponentAvatar == null
+            && (!string.IsNullOrEmpty(mp.OpponentAvatarUrl) || mp.OpponentAvatarIndex < 0);
+        if (!waitingForPhoto && opponentAvatar == null && mp != null && mp.RematchOpponentAvatar >= 0 && ProfileManager.Instance != null)
             opponentAvatar = ProfileManager.Instance.GetPresetAvatar(mp.RematchOpponentAvatar);
         searchVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
         AttachOpponentProfile(opponentName, opponentAvatar);
+        if (opponentAvatar != null)
+            mp.PaintOpponentAvatars();
 
         if (searchingStatusText != null)
             searchingStatusText.text = "Opponent Found";
@@ -467,10 +516,18 @@ public class MultiplayerLobbyUI : MonoBehaviour
     private void AttachOpponentProfile(string fullName, Sprite avatar)
     {
         if (searchingGroup == null) return;
+
+        if (avatar != null)
+        {
+            Transform avatarObject = FindDeep(searchingGroup.transform, "OpponentAvatarImage");
+            if (avatarObject != null)
+                MultiplayerManager.AssignExistingOpponentImage(avatarObject.GetComponent<Image>(), avatar);
+        }
+
         Transform opponent = FindDeep(searchingGroup.transform, "Opponent");
         if (opponent == null) return;
 
-        string shown = ProfileManager.ShortDisplayName(fullName);
+        string shown = PlayerSearchVisuals.VisibleName(fullName);
         if (!string.IsNullOrEmpty(shown))
         {
             TMP_Text[] texts = opponent.GetComponentsInChildren<TMP_Text>(true);
@@ -484,21 +541,6 @@ public class MultiplayerLobbyUI : MonoBehaviour
                 ProfileManager.FitNameLabel(texts[i]);
             }
         }
-
-        if (avatar == null) return;
-        Transform avatarObject = FindDeep(opponent, "AvatarImage");
-        if (avatarObject == null) return;
-        Image image = avatarObject.GetComponent<Image>();
-        if (image == null) return;
-        image = ProfileManager.ApplyCircularMask(image);
-        if (image == null) return;
-        image.sprite = avatar;
-        image.color = Color.white;
-        image.enabled = true;
-        image.preserveAspect = false;
-        image.gameObject.SetActive(true);
-        if (image.transform.parent != null)
-            image.transform.parent.gameObject.SetActive(true);
     }
 
     private void ShowLocalPlayer()
@@ -521,7 +563,9 @@ public class MultiplayerLobbyUI : MonoBehaviour
     {
         yield return new WaitForSeconds(InternationalAutoStartDelay);
         autoStartCoroutine = null;
-        MultiplayerManager.Instance?.HostStartMatch();
+        var mp = MultiplayerManager.Instance;
+        if (mp == null || !mp.OpponentStillConnected()) yield break;
+        mp.HostStartMatch();
     }
 
     private void CancelAutoStart()
@@ -555,7 +599,8 @@ public class MultiplayerLobbyUI : MonoBehaviour
         name = name.Trim();
         if (name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)) return false;
         if (name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)) return false;
-        if (name.StartsWith("Player_", System.StringComparison.Ordinal)) return false;
+        if (name.Equals("You", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Searching...", System.StringComparison.OrdinalIgnoreCase)) return false;
         return true;
     }
 
@@ -700,27 +745,11 @@ public class PlayerSearchVisuals
         var visuals = new PlayerSearchVisuals();
         if (root == null) return visuals;
 
-        Transform opponentRoot = FindNamed(root, "Opponent");
-        Transform avatar = null;
-        if (opponentRoot != null)
-        {
-            avatar = FindNamed(opponentRoot, "AvatarImage");
-            if (avatar == null)
-                avatar = FindNamed(opponentRoot, "Image");
-        }
-
-        if (avatar == null)
-            avatar = FindNamed(root, "AvatarImage");
-
-        if (avatar == null)
-            avatar = CreateOpponentSlot(root);
+        Transform avatar = FindNamed(root, "OpponentAvatarImage");
 
         if (avatar != null)
         {
             visuals.AvatarImage = avatar.GetComponent<Image>();
-            if (visuals.AvatarImage == null)
-                visuals.AvatarImage = avatar.GetComponentInChildren<Image>(true);
-            visuals.AvatarImage = ProfileManager.ApplyCircularMask(visuals.AvatarImage);
 
             Transform ring = FindNamed(avatar, "CircleLoading");
             if (ring != null)
@@ -730,15 +759,11 @@ public class PlayerSearchVisuals
         Transform search = FindNamedPrefix(root, "OpponentName_Text");
         if (search == null)
             search = FindNamed(root, "SearchText");
-        if (search == null && opponentRoot != null)
-            search = FindSideName(opponentRoot)?.transform;
 
         if (search != null)
             visuals.SearchText = search.GetComponent<TMP_Text>() ?? search.GetComponentInChildren<TMP_Text>(true);
 
-        Transform spinner = null;
-        if (opponentRoot != null) spinner = FindNamed(opponentRoot, "CircleSpinner");
-        if (spinner == null) spinner = FindNamed(root, "CircleSpinner");
+        Transform spinner = FindNamed(root, "CircleSpinner");
         if (spinner != null) visuals.CircleSpinner = spinner as RectTransform;
 
         Transform player = FindNamed(root, "Player");
@@ -807,9 +832,9 @@ public class PlayerSearchVisuals
         if (CircleSpinner != null)
             CircleSpinner.gameObject.SetActive(false);
 
-        if (SearchText != null && IsShownPlayerName(opponentName))
+        if (SearchText != null && writeNameLabel)
         {
-            string shown = ProfileManager.ShortDisplayName(opponentName);
+            string shown = VisibleName(opponentName);
             if (!string.IsNullOrEmpty(shown))
             {
                 SearchText.text = shown;
@@ -818,28 +843,29 @@ public class PlayerSearchVisuals
             }
         }
 
-        AvatarImage = ProfileManager.ApplyCircularMask(AvatarImage);
         if (AvatarImage == null || avatar == null) return;
-
-        AvatarImage.gameObject.SetActive(true);
-        if (AvatarImage.transform.parent != null)
-            AvatarImage.transform.parent.gameObject.SetActive(true);
-        AvatarImage.sprite = avatar;
-        AvatarImage.enabled = true;
-        AvatarImage.preserveAspect = false;
-        AvatarImage.color = Color.white;
+        MultiplayerManager.AssignExistingOpponentImage(AvatarImage, avatar);
     }
 
     // Name label on a player card. Prefer the text that sits with the avatar
     // (PlayerName_Text / OpponentName_Text). Skip the static "You" / "Opponent"
     // caption parented under WhoText when a dedicated name label exists.
+    public static string VisibleName(string name)
+    {
+        if (!IsShownPlayerName(name)) return "";
+        string shown = ProfileManager.ShortDisplayName(name);
+        if (!string.IsNullOrEmpty(shown)) return shown;
+        return name.Trim().Replace('_', ' ');
+    }
+
     private static bool IsShownPlayerName(string name)
     {
         if (string.IsNullOrWhiteSpace(name)) return false;
         name = name.Trim();
         if (name.Equals("Opponent", System.StringComparison.OrdinalIgnoreCase)) return false;
         if (name.Equals("Player", System.StringComparison.OrdinalIgnoreCase)) return false;
-        if (name.StartsWith("Player_", System.StringComparison.Ordinal)) return false;
+        if (name.Equals("You", System.StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Searching...", System.StringComparison.OrdinalIgnoreCase)) return false;
         return true;
     }
 
@@ -956,37 +982,6 @@ public class PlayerSearchVisuals
     {
         spinTween?.Kill();
         spinTween = null;
-    }
-
-    private static Transform CreateOpponentSlot(Transform root)
-    {
-        var avatarGo = new GameObject("AvatarImage", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
-        avatarGo.transform.SetParent(root, false);
-        var avatarRt = avatarGo.GetComponent<RectTransform>();
-        avatarRt.anchorMin = new Vector2(0.5f, 0.5f);
-        avatarRt.anchorMax = new Vector2(0.5f, 0.5f);
-        avatarRt.sizeDelta = new Vector2(150f, 150f);
-        avatarRt.anchoredPosition = new Vector2(0f, -210f);
-
-        var image = avatarGo.GetComponent<Image>();
-        image.color = new Color(0.82f, 0.82f, 0.84f, 1f);
-        image.raycastTarget = false;
-
-        var textGo = new GameObject("SearchText", typeof(RectTransform));
-        textGo.transform.SetParent(root, false);
-        var textRt = textGo.GetComponent<RectTransform>();
-        textRt.anchorMin = new Vector2(0.5f, 0.5f);
-        textRt.anchorMax = new Vector2(0.5f, 0.5f);
-        textRt.sizeDelta = new Vector2(420f, 56f);
-        textRt.anchoredPosition = new Vector2(0f, -310f);
-        var tmp = textGo.AddComponent<TextMeshProUGUI>();
-        tmp.alignment = TextAlignmentOptions.Center;
-        tmp.fontSize = 32f;
-        tmp.color = new Color(0.25f, 0.16f, 0.08f, 1f);
-        tmp.text = "Searching...";
-        tmp.raycastTarget = false;
-
-        return avatarGo.transform;
     }
 
     private static Transform FindNamed(Transform root, string name)

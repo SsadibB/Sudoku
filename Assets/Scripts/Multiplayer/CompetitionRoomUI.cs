@@ -44,6 +44,7 @@ public class CompetitionRoomUI : MonoBehaviour
 
     [Header("Back")]
     [SerializeField] private Button backButton;
+    [SerializeField] private Button settingsButton;
 
     [Header("Animation")]
     [SerializeField] private float animDuration = 0.3f;
@@ -71,6 +72,7 @@ public class CompetitionRoomUI : MonoBehaviour
         if (cancelJoinButton != null)   cancelJoinButton.onClick.AddListener(OnCancelJoinClicked);
         if (joinConfirmButton != null)  joinConfirmButton.onClick.AddListener(OnJoinConfirmClicked);
         if (backButton != null)         backButton.onClick.AddListener(OnBackClicked);
+        EnsureHostChromeButtons();
 
         // Ensure the "Copied" feedback text component is ready
         EnsureCopiedFeedbackText();
@@ -363,6 +365,8 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerManager.Instance.OnRoomCodeGenerated += OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    += OnOpponentJoined;
             MultiplayerManager.Instance.OnOpponentIdentity  += OnOpponentIdentity;
+            MultiplayerManager.Instance.OnOpponentLeft      += HandleOpponentDeparted;
+            MultiplayerManager.Instance.OnLocalSessionLost  += HandleLocalSessionLost;
             MultiplayerManager.Instance.OnConnectionFailed  += OnConnectionFailed;
         }
         if (ProfileManager.Instance != null)
@@ -377,6 +381,8 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerManager.Instance.OnRoomCodeGenerated -= OnRoomCodeGenerated;
             MultiplayerManager.Instance.OnOpponentJoined    -= OnOpponentJoined;
             MultiplayerManager.Instance.OnOpponentIdentity  -= OnOpponentIdentity;
+            MultiplayerManager.Instance.OnOpponentLeft      -= HandleOpponentDeparted;
+            MultiplayerManager.Instance.OnLocalSessionLost  -= HandleLocalSessionLost;
             MultiplayerManager.Instance.OnConnectionFailed  -= OnConnectionFailed;
         }
         if (ProfileManager.Instance != null)
@@ -471,8 +477,51 @@ public class CompetitionRoomUI : MonoBehaviour
         if (bg1 != null)
             bg1.SetActive(!isHostWaitActive);
 
+        BringChromeForward(backButton);
+        BringChromeForward(settingsButton);
+    }
+
+    // Back and Settings sit on the competition panel beside HostWaitGroup.
+    // They were drawn, but nothing was listening to their clicks.
+    private void EnsureHostChromeButtons()
+    {
+        if (backButton == null)
+            backButton = FindDirectButton("BackButton");
+        if (settingsButton == null)
+            settingsButton = FindDirectButton("SettingButton");
+
         if (backButton != null)
-            backButton.gameObject.SetActive(true);
+        {
+            backButton.onClick.RemoveListener(OnBackClicked);
+            backButton.onClick.AddListener(OnBackClicked);
+        }
+        if (settingsButton != null)
+        {
+            settingsButton.onClick.RemoveListener(OnHostSettingsClicked);
+            settingsButton.onClick.AddListener(OnHostSettingsClicked);
+        }
+    }
+
+    private Button FindDirectButton(string name)
+    {
+        Transform child = transform.Find(name);
+        return child != null ? child.GetComponent<Button>() : null;
+    }
+
+    private static void BringChromeForward(Button button)
+    {
+        if (button == null) return;
+        button.gameObject.SetActive(true);
+        button.interactable = true;
+        button.transform.SetAsLastSibling();
+    }
+
+    private void OnHostSettingsClicked()
+    {
+        SoundManager.Instance?.PlaySFX("Button");
+        SettingsPanelController panel = FindAnyObjectByType<SettingsPanelController>(FindObjectsInactive.Include);
+        if (panel != null)
+            panel.OpenSettings(false);
     }
 
     private void EnsureBg1Reference()
@@ -554,6 +603,21 @@ public class CompetitionRoomUI : MonoBehaviour
             MultiplayerLobbyUI.Instance?.ShowCompetitionHostWaiting(code);
     }
 
+    private void HandleOpponentDeparted()
+    {
+        if (hostWaitGroup == null || !hostWaitGroup.activeSelf) return;
+        if (hostStatusText != null)
+            hostStatusText.text = "Opponent disconnected";
+        SetHostStartEnabled(false);
+    }
+
+    private void HandleLocalSessionLost()
+    {
+        SetButtonsInteractable(true);
+        if (joinConfirmButton != null) joinConfirmButton.interactable = true;
+        ReturnToHostJoin();
+    }
+
     private void OnOpponentJoined()
     {
         if (!hostSelected)
@@ -601,12 +665,27 @@ public class CompetitionRoomUI : MonoBehaviour
         hostWaitVisuals?.ShowLocal(localName, localAvatar);
     }
 
+    private Sprite _shownHostOpponentAvatar;
+
+    private void Update()
+    {
+        if (hostWaitGroup == null || !hostWaitGroup.activeInHierarchy) return;
+        Sprite avatar = MultiplayerManager.Instance != null
+            ? MultiplayerManager.Instance.GetOpponentAvatar()
+            : null;
+        if (avatar == null || avatar == _shownHostOpponentAvatar) return;
+        _shownHostOpponentAvatar = avatar;
+        ShowHostWaitOpponent();
+    }
+
     private void ShowHostWaitOpponent()
     {
         var mp = MultiplayerManager.Instance;
         string opponentName = mp != null ? mp.OpponentName : null;
         Sprite opponentAvatar = mp != null ? mp.GetOpponentAvatar() : null;
         hostWaitVisuals?.ShowOpponent(opponentName, opponentAvatar, true);
+        if (opponentAvatar != null)
+            mp.PaintOpponentAvatars();
     }
 
     private void EnsureHostStartButton()

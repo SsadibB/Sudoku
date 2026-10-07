@@ -3287,7 +3287,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!224 &239359991
 RectTransform:
   m_ObjectHideFlags: 0
@@ -4106,7 +4106,7 @@ GameObject:
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
   m_StaticEditorFlags: 0
-  m_IsActive: 1
+  m_IsActive: 0
 --- !u!114 &324033604
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -4140,6 +4140,7 @@ MonoBehaviour:
   guestDifficultyText: {fileID: 1542757930}
   cancelJoinButton: {fileID: 128485711}
   backButton: {fileID: 0}
+  settingsButton: {fileID: 0}
   animDuration: 0.3
 --- !u!224 &324033605
 RectTransform:
@@ -4638,7 +4639,7 @@ RectTransform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
   m_AnchorMin: {x: 0, y: 1}
   m_AnchorMax: {x: 0, y: 1}
-  m_AnchoredPosition: {x: 124.67087, y: -146.98334}
+  m_AnchoredPosition: {x: 124.670876, y: -146.98334}
   m_SizeDelta: {x: 249.34175, y: 293.96667}
   m_Pivot: {x: 0.5, y: 0.5}
 --- !u!114 &391311388
@@ -20111,7 +20112,7 @@ GameObject:
   - component: {fileID: 1901318824}
   - component: {fileID: 1901318823}
   m_Layer: 5
-  m_Name: AvatarImage
+  m_Name: OpponentAvatarImage
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0
@@ -21599,7 +21600,7 @@ GameObject:
   - component: {fileID: 2019694372}
   - component: {fileID: 2019694371}
   m_Layer: 5
-  m_Name: AvatarImage
+  m_Name: OpponentAvatarImage
   m_TagString: Untagged
   m_Icon: {fileID: 0}
   m_NavMeshLayer: 0

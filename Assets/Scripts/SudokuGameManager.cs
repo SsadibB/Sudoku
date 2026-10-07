@@ -309,6 +309,8 @@ public class SudokuGameManager : MonoBehaviour
         {
             loadingPanel.SetActive(true);
             loadingPanel.transform.SetAsLastSibling();
+            if (MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame)
+                MultiplayerGameController.Instance?.TransferCachedOpponentAvatar(true);
             if (loadingFill != null)
             {
                 loadingFill.type = Image.Type.Filled;
@@ -363,16 +365,35 @@ public class SudokuGameManager : MonoBehaviour
         {
             waited += Time.unscaledDeltaTime;
             var match = MultiplayerManager.Instance;
-            bool clockReady = match == null || !match.IsInSession || match.MatchClockArmed || waited >= startTimeout;
-            if (loadingFill != null)
-                loadingFill.fillAmount = clockReady ? 1f : CreepingLoadFill(waited, duration);
-            if (clockReady)
+            if (match != null && match.MatchClockArmed)
                 break;
+            if (match != null && match.OpponentDeparted)
+                break;
+            bool sessionGone = match == null || (!match.IsInSession && !match.IsRejoining);
+            if (sessionGone && waited > 12f)
+                break;
+            if (waited >= 30f && (match == null || !match.OpponentStillConnected()))
+                break;
+            if (match != null && match.OpponentStillConnected() && waited >= startTimeout)
+                break;
+            if (loadingFill != null)
+                loadingFill.fillAmount = CreepingLoadFill(waited, duration);
             yield return null;
         }
 
         var mp = MultiplayerManager.Instance;
-        if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
+        bool play = mp != null && mp.IsInSession && mp.OpponentStillConnected() && !mp.OpponentDeparted;
+        if (!play)
+        {
+            if (loadingPanel != null)
+                loadingPanel.SetActive(false);
+            if (mp != null && mp.IsInSession)
+                mp.Disconnect();
+            SceneManager.LoadScene("MainMenu");
+            yield break;
+        }
+
+        if (!mp.MatchClockArmed)
             mp.ArmMatchClockNow();
         if (loadingFill != null) loadingFill.fillAmount = 1f;
         if (loadingPanel != null)
@@ -386,6 +407,18 @@ public class SudokuGameManager : MonoBehaviour
             return (elapsed / span) * 0.9f;
         float extra = elapsed - span;
         return 0.9f + 0.09f * (extra / (extra + 1.5f));
+    }
+
+    // The level picker is a single-player control. Multiplayer still uses the
+    // chosen difficulty; it just must not show or accept taps on Level.
+    private void ApplyLevelButtonVisibility()
+    {
+        var game = GameObject.Find("Game");
+        if (game == null) return;
+        Transform levelButton = game.transform.Find("ButtonsAndLevels/Level");
+        if (levelButton == null) return;
+        bool multiplayer = MultiplayerManager.Instance != null && MultiplayerManager.Instance.IsMultiplayerGame;
+        levelButton.gameObject.SetActive(!multiplayer);
     }
 
     private void BindGameplayHud()
@@ -404,6 +437,7 @@ public class SudokuGameManager : MonoBehaviour
         if (single != null) single.gameObject.SetActive(!multiplayer);
         if (multi != null) multi.gameObject.SetActive(multiplayer);
         if (boardButton != null) boardButton.gameObject.SetActive(multiplayer);
+        ApplyLevelButtonVisibility();
 
         if (multiplayer || single == null) return;
 
@@ -831,6 +865,8 @@ public class SudokuGameManager : MonoBehaviour
         GameplayReady = true;
         if (!_sharedClock)
             BindGameplayHud();
+        else
+            ApplyLevelButtonVisibility();
         if (_sharedClock)
             MultiplayerManager.Instance?.NotifyLocalGameplayReady();
 

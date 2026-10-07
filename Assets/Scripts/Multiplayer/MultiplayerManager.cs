@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.SceneManagement;
+using UnityEngine.UI;
 using Fusion;
 using Fusion.Sockets;
 
@@ -79,6 +80,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     public event Action<string> OnRoomCodeGenerated;       // Competition host: roomCode
     public event Action OnOpponentJoined;
     public event Action OnOpponentLeft;
+    /// <summary>This device lost the session and could not rejoin. The match UI must leave with it.</summary>
+    public event Action OnLocalSessionLost;
     public event Action OnMatchmakingTimeout;
     public event Action OnOpponentIdentity;
     public event Action OnRematchStateChanged;
@@ -110,6 +113,21 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private string loadedOpponentAvatarUrl;
     private byte[] localAvatarJpeg;
     private byte[] localAvatarThumbnail;
+    private int _avatarSourceId = int.MinValue;
+    private Coroutine _avatarSendRoutine;
+    private int _avatarBursts;
+    private byte[][] _avatarChunks;
+    private int _avatarChunkTotal;
+    private int _avatarChunkStamp;
+    private Sprite _lastPaintedOpponentAvatar;
+    private float _nextOpponentAvatarPaint;
+    private bool _opponentSeenInRoom;
+    private float _opponentMissingSince = -1f;
+    private float _departureConfirmAt = -1f;
+    private bool _opponentDepartureNotified;
+    private Coroutine _rejoinRoutine;
+    private const float OpponentMissingGraceSeconds = 12f;
+    private const int SharpAvatarMaxBytes = 48000;
     private int seenAvatarCount = -1;
     private int seenAvatarChecksum;
     private int opponentAvatarPixels;
@@ -167,6 +185,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private int _rejoinAttempts;
     private Photon.Realtime.ConnectionHandler _connectionHandler;
     private AndroidJavaObject _matchWakeLock;
+    private AndroidJavaObject _wifiLock;
 
     private int _lastClockCenti = -1;
     private float _nextClockSend;
@@ -510,19 +529,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (pause)
         {
+            _backgrounded = true;
             KeepSessionAliveInBackground();
             AnnounceBackground(true);
             FlushFusionClient();
             return;
         }
 
+        _backgrounded = false;
         AnnounceBackground(false);
         BroadcastIdentity();
+        DeliverAvatarSoon(true);
         FlushMatchClock();
         if (_opponentLeftWhileAway)
         {
             _opponentLeftWhileAway = false;
-            OnOpponentLeft?.Invoke();
+            if (!OpponentBackgrounded)
+                _departureConfirmAt = Time.unscaledTime + OpponentMissingGraceSeconds;
         }
         if (!_needsRejoin) return;
         _needsRejoin = false;
@@ -535,19 +558,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (!hasFocus)
         {
+            _backgrounded = true;
             KeepSessionAliveInBackground();
             AnnounceBackground(true);
             FlushFusionClient();
             return;
         }
 
+        _backgrounded = false;
         AnnounceBackground(false);
         BroadcastIdentity();
+        DeliverAvatarSoon(true);
         FlushMatchClock();
         if (_opponentLeftWhileAway)
         {
             _opponentLeftWhileAway = false;
-            OnOpponentLeft?.Invoke();
+            if (!OpponentBackgrounded)
+                _departureConfirmAt = Time.unscaledTime + OpponentMissingGraceSeconds;
         }
         if (!_needsRejoin) return;
         _needsRejoin = false;
@@ -557,6 +584,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private void Update()
     {
         if (!IsInSession || _intentionalLeave) return;
+        PullPhotonNickName();
         PullRemoteProfile();
         if (RematchRequestedLocal && Time.unscaledTime >= _nextRematchSend)
         {
@@ -574,9 +602,81 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             SendToOthers(ReadyKey, Encoding.UTF8.GetBytes("1"));
             TryArmMatchClock();
         }
+        WatchOpponentPresence();
         if (Time.unscaledTime < _nextIdentitySend) return;
         _nextIdentitySend = Time.unscaledTime + 3f;
         BroadcastIdentity();
+    }
+
+    /// <summary>True while a dropped session is being joined again.</summary>
+    public bool IsRejoining => _needsRejoin || _rejoinRoutine != null || (isStartingGame && _rejoinAttempts > 0);
+
+    /// <summary>The other player has left or been removed from this room.</summary>
+    public bool OpponentDeparted => _opponentDepartureNotified || OpponentForfeited;
+
+    /// <summary>Both seats are filled and neither side has left.</summary>
+    public bool OpponentStillConnected()
+    {
+        if (!IsInSession || _opponentDepartureNotified || OpponentForfeited) return false;
+        return CountActivePlayers() >= 2;
+    }
+
+    private int CountActivePlayers()
+    {
+        if (Runner == null || !Runner.IsRunning) return 0;
+        int count = 0;
+        foreach (var _ in Runner.ActivePlayers)
+            count++;
+        return count;
+    }
+
+    // A live match must not keep running after the other phone is gone.
+    // A few seconds covers a one-frame player-list flicker. An explicit exit
+    // still arrives through NoteOpponentExit without waiting.
+    private void WatchOpponentPresence()
+    {
+        if (_opponentDepartureNotified || waitingForOpponent) return;
+
+        if (OpponentBackgrounded)
+        {
+            _opponentMissingSince = -1f;
+            _departureConfirmAt = -1f;
+            return;
+        }
+
+        if (_departureConfirmAt >= 0f && Time.unscaledTime >= _departureConfirmAt)
+        {
+            _departureConfirmAt = -1f;
+            if (CountActivePlayers() < 2)
+                NotifyOpponentDeparted();
+        }
+
+        if (CountActivePlayers() >= 2 && !OpponentForfeited)
+        {
+            _opponentSeenInRoom = true;
+            _opponentMissingSince = -1f;
+            return;
+        }
+
+        if (!_opponentSeenInRoom) return;
+        if (OpponentForfeited)
+        {
+            NotifyOpponentDeparted();
+            return;
+        }
+
+        if (_opponentMissingSince < 0f)
+            _opponentMissingSince = Time.unscaledTime;
+        else if (Time.unscaledTime - _opponentMissingSince >= OpponentMissingGraceSeconds)
+            NotifyOpponentDeparted();
+    }
+
+    private void NotifyOpponentDeparted()
+    {
+        if (_opponentDepartureNotified || _intentionalLeave) return;
+        _opponentDepartureNotified = true;
+        _opponentMissingSince = -1f;
+        OnOpponentLeft?.Invoke();
     }
 
     private void FlushMatchClock()
@@ -586,6 +686,10 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         EnsureSharedClock();
         float elapsed = HasSharedClock ? SharedElapsed : 0f;
         NetworkSudokuPlayer.Local?.FlushElapsed(elapsed);
+        var game = SudokuGameManager.Instance;
+        int score = game != null ? game.SessionScore : 0;
+        int hearts = game != null ? game.CurrentHalfHearts : 0;
+        PublishLiveStats(elapsed, score, hearts, false, true);
     }
 
     /// <summary>
@@ -708,41 +812,66 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             sceneLoadRequested = false;
             _intentionalLeave = false;
             _needsRejoin = false;
-            _sessionName = $"INT_{(int)difficulty}";
+            _sessionName = null;
             ClearOpponentIdentity();
             ClearRematchFlags();
 
             StartGameResult result = default;
             bool joined = false;
-            for (int slot = 0; slot < 6 && !joined; slot++)
+            var sessionFilter = new Dictionary<string, SessionProperty>
             {
-                _sessionName = slot == 0
-                    ? $"INT_{(int)difficulty}"
-                    : $"INT_{(int)difficulty}_{slot}";
+                { "mode", "intl" },
+                { "diff", (int)difficulty }
+            };
 
+            // Join any open room for this difficulty. A fixed room name stays
+            // full after someone leaves (PlayerTtl), so the next player never
+            // lands in the room where someone is still waiting.
+            for (int attempt = 0; attempt < 8 && !joined; attempt++)
+            {
                 var runner = await CreateNetworkRunner();
                 var startArgs = new StartGameArgs
                 {
                     GameMode = GameMode.Shared,
                     Address = NetAddress.Any(),
-                    SessionName = _sessionName,
+                    SessionName = null,
                     Scene = GetStartGameSceneInfo(),
                     PlayerCount = 2,
+                    IsOpen = true,
+                    IsVisible = true,
+                    MatchmakingMode = Photon.Realtime.MatchmakingMode.FillRoom,
+                    SessionProperties = sessionFilter,
                     CustomPhotonAppSettings = GetPhotonAppSettings(),
                     SceneManager = runner.GetComponent<NetworkSceneManagerDefault>(),
                     ObjectProvider = runner.GetComponent<NetworkObjectProviderDefault>()
                 };
 
                 result = await runner.StartGame(startArgs);
-                if (result.Ok)
+                if (!result.Ok)
                 {
-                    joined = true;
-                    break;
+                    await ShutdownRunner();
+                    if (result.ShutdownReason != ShutdownReason.GameIsFull
+                        && result.ShutdownReason != ShutdownReason.GameClosed
+                        && result.ShutdownReason != ShutdownReason.GameNotFound)
+                        break;
+                    continue;
                 }
 
-                await ShutdownRunner();
-                if (result.ShutdownReason != ShutdownReason.GameIsFull)
-                    break;
+                if (Runner != null && Runner.SessionInfo.IsValid && !string.IsNullOrEmpty(Runner.SessionInfo.Name))
+                    _sessionName = Runner.SessionInfo.Name;
+
+                PublishPhotonNickName();
+                OpenSearchRoom();
+
+                if (RoomBlocksNewOpponent())
+                {
+                    Debug.LogWarning("[MultiplayerManager] Search room still holds an inactive player. Trying another room.");
+                    CloseAndDropRoom();
+                    await ShutdownRunner();
+                    continue;
+                }
+
+                joined = true;
             }
 
             if (!joined)
@@ -892,6 +1021,14 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     /// <summary>Disconnect from Photon and clean up.</summary>
     public async void Disconnect()
     {
+        if (!_intentionalLeave && Runner != null && Runner.IsRunning)
+        {
+            AnnounceLocalExit();
+            FlushFusionClient();
+            try { await Task.Delay(300); }
+            catch (Exception) { }
+        }
+
         _intentionalLeave = true;
         _needsRejoin = false;
         _backgrounded = false;
@@ -1002,12 +1139,17 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private IEnumerator MatchmakingTimeoutRoutine()
     {
         yield return new WaitForSeconds(MatchmakingTimeoutSeconds);
-        if (waitingForOpponent)
+        // Only an empty search times out. A player already in HostWait or a
+        // match must stay connected for as long as the session is alive.
+        if (!waitingForOpponent || CountActivePlayers() >= 2)
         {
             waitingForOpponent = false;
-            OnMatchmakingTimeout?.Invoke();
-            Disconnect();
+            yield break;
         }
+
+        waitingForOpponent = false;
+        OnMatchmakingTimeout?.Invoke();
+        Disconnect();
     }
 
     // ====================================================================
@@ -1044,13 +1186,18 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         if (playerCount < 2) return;
 
         waitingForOpponent = false;
+        _opponentSeenInRoom = true;
+        _opponentDepartureNotified = false;
+        _opponentMissingSince = -1f;
         if (matchmakingTimeoutCoroutine != null)
         {
             StopCoroutine(matchmakingTimeoutCoroutine);
             matchmakingTimeoutCoroutine = null;
         }
 
+        HoldMatchedRoom();
         BroadcastIdentity();
+        DeliverAvatarSoon(true);
         OnOpponentJoined?.Invoke();
         if (identityResendCoroutine != null)
             StopCoroutine(identityResendCoroutine);
@@ -1094,13 +1241,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         name = name.Trim();
         if (name.Equals("Opponent", StringComparison.OrdinalIgnoreCase)) return false;
         if (name.Equals("Player", StringComparison.OrdinalIgnoreCase)) return false;
-        if (name.StartsWith("Player_", StringComparison.Ordinal)) return false;
-        for (int i = 0; i < name.Length; i++)
-        {
-            if (!char.IsDigit(name[i]))
-                return true;
-        }
-        return false;
+        if (name.Equals("You", StringComparison.OrdinalIgnoreCase)) return false;
+        if (name.Equals("Searching...", StringComparison.OrdinalIgnoreCase)) return false;
+        return true;
     }
 
     private static bool IsSaneProfileLevel(int level) => level >= 1 && level <= 300;
@@ -1133,32 +1276,6 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 OpponentAvatarIndex = index;
                 changed = true;
             }
-
-            int count = remote.AvatarByteCount;
-            if (count > 32 && count <= remote.AvatarJpeg.Length && string.IsNullOrEmpty(loadedOpponentAvatarUrl))
-            {
-                int checksum = remote.AvatarJpeg[0]
-                    + remote.AvatarJpeg[count / 2] * 31
-                    + remote.AvatarJpeg[count - 1] * 17
-                    + count;
-                if (count != seenAvatarCount || checksum != seenAvatarChecksum)
-                {
-                    byte[] jpg = new byte[count];
-                    for (int i = 0; i < count; i++)
-                        jpg[i] = remote.AvatarJpeg[i];
-                    if (ApplyOpponentAvatarBytes(jpg, false))
-                    {
-                        seenAvatarCount = count;
-                        seenAvatarChecksum = checksum;
-                        changed = true;
-                    }
-                    else if (OpponentAvatarSprite != null)
-                    {
-                        seenAvatarCount = count;
-                        seenAvatarChecksum = checksum;
-                    }
-                }
-            }
         }
         catch
         {
@@ -1178,9 +1295,56 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         string avatarUrl = ProfileManager.Instance != null ? ProfileManager.Instance.AvatarUrl : null;
         if (string.IsNullOrEmpty(avatarUrl)) avatarUrl = "";
         else avatar = -1;
+        var localPlayer = NetworkSudokuPlayer.Local;
+        if (localPlayer != null && localPlayer.Object != null && localPlayer.Object.IsValid && localPlayer.HasStateAuthority
+            && IsRealPlayerName(LocalPlayerName))
+        {
+            try
+            {
+                if (!string.Equals(localPlayer.PlayerName.ToString(), LocalPlayerName, StringComparison.Ordinal))
+                    localPlayer.PlayerName = LocalPlayerName;
+            }
+            catch { }
+        }
+
         string payload = LocalPlayerName + "\n" + avatar + "\n" + level + "\n" + avatarUrl;
+        PublishPhotonNickName();
         SendToOthers(IdentityKey, Encoding.UTF8.GetBytes(payload));
-        SendAvatarImage();
+        DeliverAvatarSoon(false);
+    }
+
+    private void PublishPhotonNickName()
+    {
+        if (string.IsNullOrWhiteSpace(LocalPlayerName)) return;
+        try
+        {
+            var local = ResolveFusionClient(Runner)?.LocalPlayer;
+            if (local == null) return;
+            if (!string.Equals(local.NickName, LocalPlayerName, StringComparison.Ordinal))
+                local.NickName = LocalPlayerName;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[MultiplayerManager] Nickname skipped: " + ex.Message);
+        }
+    }
+
+    private void PullPhotonNickName()
+    {
+        var room = ResolveFusionClient(Runner)?.CurrentRoom;
+        if (room == null || room.Players == null) return;
+
+        foreach (var player in room.Players.Values)
+        {
+            if (player == null || player.IsLocal || player.IsInactive) continue;
+            if (!IsRealPlayerName(player.NickName)) continue;
+
+            string nick = player.NickName.Trim();
+            if (string.Equals(OpponentName, nick, StringComparison.Ordinal)) return;
+            OpponentName = nick;
+            OnOpponentIdentity?.Invoke();
+            return;
+        }
     }
 
     private PlayerRef _opponentPlayer;
@@ -1213,35 +1377,110 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
-    private void SendAvatarImage()
+    private void DeliverAvatarSoon(bool force = false)
+    {
+        EnsureAvatarEncoded();
+        if (force)
+            _avatarBursts = 0;
+        if (localAvatarJpeg == null || _avatarSendRoutine != null || _avatarBursts >= 3) return;
+        _avatarBursts++;
+        _avatarSendRoutine = StartCoroutine(DeliverAvatarImage());
+    }
+
+    private IEnumerator DeliverAvatarImage()
+    {
+        for (int pass = 0; pass < 2; pass++)
+        {
+            yield return SendAvatarChunks();
+            if (pass == 0)
+                yield return new WaitForSecondsRealtime(1.5f);
+        }
+
+        _avatarSendRoutine = null;
+    }
+
+    // One full photo is larger than a single Fusion message, so the portrait
+    // was dropped and the other phone kept an empty circle. Small pieces arrive.
+    private IEnumerator SendAvatarChunks()
+    {
+        byte[] jpg = localAvatarJpeg;
+        if (jpg == null || jpg.Length < 32 || !IsInSession) yield break;
+
+        const int chunkSize = 480;
+        int total = (jpg.Length + chunkSize - 1) / chunkSize;
+        for (int i = 0; i < total; i++)
+        {
+            int offset = i * chunkSize;
+            int count = Math.Min(chunkSize, jpg.Length - offset);
+            byte[] packet = new byte[count + 3];
+            packet[0] = 0xA7;
+            packet[1] = (byte)i;
+            packet[2] = (byte)total;
+            Buffer.BlockCopy(jpg, offset, packet, 3, count);
+            SendToOthers(ReliableKey.FromInts(6, i + 1, total, jpg.Length), packet);
+            float waited = 0f;
+            while (_ackChunk != i + 1 && waited < 0.2f)
+            {
+                waited += Time.unscaledDeltaTime;
+                yield return null;
+            }
+        }
+    }
+
+    private void EnsureAvatarEncoded()
     {
         Sprite sprite = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
         Texture source = sprite != null ? sprite.texture : null;
         if (source == null) return;
 
-        int native = Mathf.RoundToInt(Mathf.Max(sprite.textureRect.width, sprite.textureRect.height));
-        int[] sizes = { Mathf.Clamp(native, 96, 384), 256, 192, 128 };
+        int sourceId = source.GetInstanceID();
+        if (localAvatarJpeg != null && _avatarSourceId == sourceId) return;
+
+        _avatarSourceId = sourceId;
+        if (_avatarSendRoutine != null)
+        {
+            StopCoroutine(_avatarSendRoutine);
+            _avatarSendRoutine = null;
+        }
+
+        int native = Mathf.Max(source.width, source.height);
+        int first = Mathf.Clamp(native, 192, 384);
+        localAvatarJpeg = EncodeAvatarThatFits(
+            source,
+            sprite,
+            new[] { first, 320, 256, 192 },
+            new[] { 85, 75, 65 },
+            SharpAvatarMaxBytes);
+    }
+
+    private void SendAvatarImage()
+    {
+        DeliverAvatarSoon(true);
+    }
+
+    private byte[] EncodeAvatarThatFits(Texture source, Sprite sprite, int[] sizes, int[] qualities, int maxBytes)
+    {
         for (int s = 0; s < sizes.Length; s++)
         {
-            byte[] jpg = EncodeAvatarJpeg(source, sprite, sizes[s], 82);
-            if (jpg == null || jpg.Length <= 32 || jpg.Length > 48000)
-                continue;
-
-            localAvatarJpeg = jpg;
-            SendToOthers(AvatarImageKey, jpg);
-            break;
+            for (int q = 0; q < qualities.Length; q++)
+            {
+                byte[] jpg = EncodeAvatarJpeg(source, sprite, sizes[s], qualities[q]);
+                if (jpg != null && jpg.Length > 32 && jpg.Length <= maxBytes)
+                    return jpg;
+            }
         }
-
-        byte[] thumbnail = EncodeAvatarJpeg(source, sprite, 96, 70);
-        if (thumbnail != null && thumbnail.Length > 32 && thumbnail.Length <= 1024)
-        {
-            localAvatarThumbnail = thumbnail;
-            NetworkSudokuPlayer.Local?.PublishAvatarJpeg(thumbnail);
-        }
+        return null;
     }
 
     private byte[] EncodeAvatarJpeg(Texture source, Sprite sprite, int size, int quality)
     {
+        if (source is Texture2D readableSource && readableSource.isReadable)
+        {
+            byte[] fromPixels = EncodeReadableSprite(readableSource, sprite, size, quality);
+            if (fromPixels != null && fromPixels.Length > 32)
+                return fromPixels;
+        }
+
         RenderTexture rt = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32);
         RenderTexture previous = RenderTexture.active;
         Texture2D readable = null;
@@ -1271,10 +1510,119 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
+    private byte[] EncodeReadableSprite(Texture2D texture, Sprite sprite, int size, int quality)
+    {
+        Rect area = sprite != null ? sprite.textureRect : new Rect(0, 0, texture.width, texture.height);
+        int x = Mathf.Clamp(Mathf.FloorToInt(area.x), 0, Mathf.Max(0, texture.width - 1));
+        int y = Mathf.Clamp(Mathf.FloorToInt(area.y), 0, Mathf.Max(0, texture.height - 1));
+        int w = Mathf.Clamp(Mathf.RoundToInt(area.width), 1, texture.width - x);
+        int h = Mathf.Clamp(Mathf.RoundToInt(area.height), 1, texture.height - y);
+
+        Color[] pixels;
+        try
+        {
+            pixels = texture.GetPixels(x, y, w, h);
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+
+        Texture2D crop = new Texture2D(w, h, TextureFormat.RGBA32, false);
+        crop.SetPixels(pixels);
+        crop.Apply(false, false);
+
+        RenderTexture rt = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        Texture2D scaled = null;
+        try
+        {
+            Graphics.Blit(crop, rt);
+            RenderTexture.active = rt;
+            scaled = new Texture2D(size, size, TextureFormat.RGB24, false);
+            scaled.ReadPixels(new Rect(0, 0, size, size), 0, 0);
+            scaled.Apply(false, false);
+            return scaled.EncodeToJPG(quality);
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[MultiplayerManager] Avatar image send skipped: " + ex.Message);
+            return null;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
+            Destroy(crop);
+            if (scaled != null)
+                Destroy(scaled);
+        }
+    }
+
     public void PublishCachedAvatar()
     {
         if (localAvatarThumbnail != null)
             NetworkSudokuPlayer.Local?.PublishAvatarJpeg(localAvatarThumbnail);
+    }
+
+    private void AcceptAvatarChunk(int indexFromKey, int totalFromKey, int stamp, byte[] raw)
+    {
+        if (raw == null || raw.Length < 2) return;
+
+        int index;
+        int total;
+        byte[] piece;
+        if (raw[0] == 0xA7 && raw.Length >= 4)
+        {
+            index = raw[1];
+            total = raw[2];
+            piece = new byte[raw.Length - 3];
+            Buffer.BlockCopy(raw, 3, piece, 0, piece.Length);
+        }
+        else if (raw.Length >= 2 && raw[0] == 0xFF && raw[1] == 0xD8)
+        {
+            ApplyOpponentAvatarBytes(raw, true);
+            return;
+        }
+        else
+        {
+            index = indexFromKey;
+            total = totalFromKey > 0 ? totalFromKey : 1;
+            piece = raw;
+        }
+
+        if (total <= 1)
+        {
+            ApplyOpponentAvatarBytes(piece, true);
+            return;
+        }
+        if (total > 128 || index < 0 || index >= total) return;
+
+        int imageStamp = stamp != 0 ? stamp : total;
+        if (_avatarChunkStamp != imageStamp || _avatarChunks == null || _avatarChunkTotal != total)
+        {
+            _avatarChunkStamp = imageStamp;
+            _avatarChunkTotal = total;
+            _avatarChunks = new byte[total][];
+        }
+
+        _avatarChunks[index] = piece;
+        int length = 0;
+        for (int i = 0; i < total; i++)
+        {
+            if (_avatarChunks[i] == null) return;
+            length += _avatarChunks[i].Length;
+        }
+
+        byte[] jpg = new byte[length];
+        int write = 0;
+        for (int i = 0; i < total; i++)
+        {
+            Buffer.BlockCopy(_avatarChunks[i], 0, jpg, write, _avatarChunks[i].Length);
+            write += _avatarChunks[i].Length;
+        }
+
+        ApplyOpponentAvatarBytes(jpg, true);
     }
 
     private bool ApplyOpponentAvatarBytes(byte[] jpg, bool replace = false)
@@ -1289,8 +1637,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         int pixels = texture.width * texture.height;
-        bool haveSprite = OpponentAvatarSprite != null;
-        if (haveSprite && (opponentAvatarIsOriginal || (!replace && pixels <= opponentAvatarPixels)))
+        if (OpponentAvatarSprite != null && pixels <= opponentAvatarPixels)
         {
             Destroy(texture);
             return false;
@@ -1315,6 +1662,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             new Vector2(0.5f, 0.5f),
             100f);
         sprite.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        sprite.name = "OpponentProfile";
         return sprite;
     }
 
@@ -1330,6 +1678,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentAvatarSprite = CreateSharpAvatarSprite(texture);
         if (markOriginal)
             opponentAvatarIsOriginal = true;
+        PaintOpponentAvatars();
     }
 
     private static Texture2D CopyReadableTexture(Texture2D source)
@@ -1357,8 +1706,15 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         foreach (var other in Runner.ActivePlayers)
         {
             if (other == Runner.LocalPlayer) continue;
-            Runner.SendReliableDataToPlayer(other, key, payload);
-            sent = true;
+            try
+            {
+                Runner.SendReliableDataToPlayer(other, key, payload);
+                sent = true;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[MultiplayerManager] Send skipped: " + ex.Message);
+            }
         }
 
         if (!sent && _hasOpponentPlayer && _opponentPlayer != Runner.LocalPlayer)
@@ -1398,6 +1754,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         OpponentForfeited = true;
         float elapsed = HasSharedClock ? SharedElapsed : 0f;
         FreezeMatchClocks(elapsed);
+        NotifyOpponentDeparted();
     }
 
     private void EnsureLocalPlayerObject()
@@ -1428,10 +1785,18 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         opponentAvatarPayload = null;
         loadedOpponentAvatarUrl = null;
+        _avatarChunks = null;
+        _avatarChunkTotal = 0;
+        _avatarChunkStamp = 0;
+        _lastPaintedOpponentAvatar = null;
+        _nextOpponentAvatarPaint = 0f;
         seenAvatarCount = -1;
         seenAvatarChecksum = 0;
         opponentAvatarPixels = 0;
         opponentAvatarIsOriginal = false;
+        _opponentSeenInRoom = false;
+        _opponentMissingSince = -1f;
+        _opponentDepartureNotified = false;
         if (opponentAvatarRoutine != null)
         {
             StopCoroutine(opponentAvatarRoutine);
@@ -1514,11 +1879,14 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         if (sceneLoadRequested) return;
         if (Runner == null || !Runner.IsRunning || !Runner.IsSharedModeMasterClient) return;
+        if (!OpponentStillConnected()) return;
 
         sceneLoadRequested = true;
         rematchLobbyRequested = false;
         waitingForOpponent = false;
         ClearRematchFlags();
+        SealMatchRoom();
+        PreserveDisplayedOpponentAvatar();
 
         Runner.LoadScene(SceneRef.FromIndex(
             SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/GameScene.unity")));
@@ -1564,8 +1932,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         if (_rematchStartSent || sceneLoadRequested) return;
         if (Runner == null || !Runner.IsRunning || !Runner.IsSharedModeMasterClient) return;
-
-        _rematchStartSent = true;
+        if (!OpponentStillConnected()) return;
         sceneLoadRequested = true;
         rematchLobbyRequested = false;
         waitingForOpponent = false;
@@ -1583,6 +1950,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         SendToOthers(RematchKey, Encoding.UTF8.GetBytes(payload));
         FlushFusionClient();
         ClearRematchFlags();
+        PreserveDisplayedOpponentAvatar();
 
         Runner.LoadScene(SceneRef.FromIndex(
             SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/GameScene.unity")));
@@ -1634,17 +2002,120 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             SceneUtility.GetBuildIndexByScenePath("Assets/Scenes/MainMenu.unity")));
     }
 
+    /// <summary>
+    /// The portrait already on SearchingGroup or HostWaitGroup is the one gameplay must reuse.
+    /// </summary>
+    public void PreserveDisplayedOpponentAvatar()
+    {
+        if (OpponentAvatarSprite != null && !IsPlaceholderAvatar(OpponentAvatarSprite))
+            return;
+
+        Image[] images = Resources.FindObjectsOfTypeAll<Image>();
+        for (int i = 0; i < images.Length; i++)
+        {
+            Image image = images[i];
+            if (image == null || image.sprite == null || !image.gameObject.scene.IsValid()) continue;
+            if (image.gameObject.name != "OpponentAvatarImage") continue;
+            if (IsPlaceholderAvatar(image.sprite)) continue;
+            OpponentAvatarSprite = image.sprite;
+            if (image.sprite.texture is Texture2D texture)
+                opponentAvatarTexture = texture;
+            return;
+        }
+    }
+
+    public static bool IsPlaceholderAvatar(Sprite sprite)
+    {
+        if (sprite == null) return true;
+        string name = sprite.name ?? "";
+        return name.IndexOf("SearchingAvatar", StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
     public Sprite GetOpponentAvatar()
     {
-        if (OpponentAvatarSprite == null && opponentAvatarPayload != null && opponentAvatarPayload.Length > 32)
-            ApplyOpponentAvatarBytes(opponentAvatarPayload, true);
+        if (OpponentAvatarSprite == null || OpponentAvatarSprite.texture == null)
+        {
+            if (opponentAvatarPayload != null && opponentAvatarPayload.Length > 32)
+                ApplyOpponentAvatarBytes(opponentAvatarPayload, true);
+        }
         if (OpponentAvatarSprite != null) return OpponentAvatarSprite;
-        if (!string.IsNullOrEmpty(OpponentAvatarUrl))
+        // An account photo is still downloading. Keep the circle empty until
+        // that photo is cached, instead of swapping in a preset.
+        if (!string.IsNullOrEmpty(OpponentAvatarUrl) || OpponentAvatarIndex < 0)
             return null;
         if (rematchOpponentAvatarSprite != null) return rematchOpponentAvatarSprite;
         if (ProfileManager.Instance == null) return null;
         int index = OpponentAvatarIndex >= 0 ? OpponentAvatarIndex : RematchOpponentAvatar;
         return ProfileManager.Instance.GetPresetAvatar(index);
+    }
+
+    /// <summary>
+    /// Writes the cached opponent portrait onto every opponent avatar Image,
+    /// including OpponentAvatarImage. The local player's portrait is left alone.
+    /// </summary>
+    public void PaintOpponentAvatars()
+    {
+        Sprite sprite = OpponentAvatarSprite;
+        if (sprite == null) return;
+        if (sprite == _lastPaintedOpponentAvatar && Time.unscaledTime < _nextOpponentAvatarPaint)
+            return;
+        _lastPaintedOpponentAvatar = sprite;
+        _nextOpponentAvatarPaint = Time.unscaledTime + 0.4f;
+
+        Image[] images = Resources.FindObjectsOfTypeAll<Image>();
+        for (int i = 0; i < images.Length; i++)
+        {
+            Image image = images[i];
+            if (image == null || !image.gameObject.scene.IsValid()) continue;
+            if (!IsOpponentPortraitTarget(image.transform)) continue;
+            PaintPortrait(image, sprite);
+        }
+    }
+
+    private static bool IsOpponentPortraitTarget(Transform image)
+    {
+        if (image.name == "OpponentAvatarImage") return true;
+
+        bool underOpponent = false;
+        bool underLocal = false;
+        Transform cursor = image;
+        while (cursor != null)
+        {
+            if (cursor.name == "Opponent" || cursor.name == "OpponentSide")
+                underOpponent = true;
+            if (cursor.name == "Player" || cursor.name == "PlayerSide")
+                underLocal = true;
+            cursor = cursor.parent;
+        }
+
+        if (underLocal && !underOpponent) return false;
+        if (!underOpponent) return false;
+        return image.name == "Avatar" || image.name == "AvatarImage";
+    }
+
+    /// <summary>
+    /// Puts the cached opponent photo on the Image that is already in the scene.
+    /// Does not create a Circle Mask, an Avatar Image, or any other object.
+    /// </summary>
+    public static void AssignExistingOpponentImage(Image image, Sprite sprite)
+    {
+        if (image == null || sprite == null) return;
+        if (IsPlaceholderAvatar(sprite) && image.sprite != null && !IsPlaceholderAvatar(image.sprite))
+            return;
+        image.sprite = sprite;
+        image.enabled = true;
+        image.color = Color.white;
+        for (int i = 0; i < image.transform.childCount; i++)
+        {
+            Transform child = image.transform.GetChild(i);
+            if (child.name == "CircleSpinner" || child.name == "CircleLoading")
+                child.gameObject.SetActive(false);
+        }
+    }
+
+    private static void PaintPortrait(Image image, Sprite sprite)
+    {
+        AssignExistingOpponentImage(image, sprite);
     }
 
     private void BeginOpponentAvatarDownload(string url)
@@ -1682,13 +2153,23 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                     Texture2D owned = CopyReadableTexture(downloaded);
                     if (owned != null)
                     {
-                        byte[] jpg = owned.EncodeToJPG(90);
-                        if (jpg != null && jpg.Length > 32)
-                            opponentAvatarPayload = jpg;
-                        RememberOpponentAvatar(owned, true);
+                        int pixels = owned.width * owned.height;
+                        bool better = OpponentAvatarSprite == null || pixels >= opponentAvatarPixels;
+                        if (better)
+                        {
+                            byte[] jpg = owned.EncodeToJPG(90);
+                            if (jpg != null && jpg.Length > 32)
+                                opponentAvatarPayload = jpg;
+                            RememberOpponentAvatar(owned, true);
+                            OnOpponentIdentity?.Invoke();
+                        }
+                        else
+                        {
+                            Destroy(owned);
+                        }
+
                         loadedOpponentAvatarUrl = url;
                         opponentAvatarRoutine = null;
-                        OnOpponentIdentity?.Invoke();
                         yield break;
                     }
                 }
@@ -1701,6 +2182,12 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
 
         opponentAvatarRoutine = null;
+        if (OpponentAvatarSprite == null)
+        {
+            string fallback = url.Replace("=s1024-c", "=s512-c");
+            if (!string.Equals(fallback, url, StringComparison.Ordinal))
+                yield return DownloadOpponentAvatar(fallback);
+        }
     }
 
     private IEnumerator ConfigureRoomSoon()
@@ -1713,14 +2200,65 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private void ConfigureRoomPersistence()
     {
         KeepSessionAliveInBackground();
+        if (waitingForOpponent)
+            OpenSearchRoom();
+        else if (!sceneLoadRequested)
+            HoldMatchedRoom();
+        else
+            SealMatchRoom();
+    }
+
+    // A search room must drop a player the moment they cancel. A long PlayerTtl
+    // keeps that seat for minutes, Photon reports the room as full, and the
+    // other phone can never join the person who is still waiting.
+    private void OpenSearchRoom()
+    {
         try
         {
             var room = ResolveFusionClient(Runner)?.CurrentRoom;
             if (room == null) return;
-            // Keep the seat through a screen-off so the other phone does not
-            // treat the pause as the player leaving the match.
-            room.PlayerTtl = 180000;
-            room.EmptyRoomTtl = 180000;
+            room.PlayerTtl = 0;
+            room.EmptyRoomTtl = 0;
+            room.IsOpen = true;
+            room.IsVisible = true;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Search room setup skipped: {ex.Message}");
+        }
+    }
+
+    // Both players are in the room. Keep the seat through a short drop so a
+    // stall does not delete them, but hide the room from new matchmaking.
+    private void HoldMatchedRoom()
+    {
+        try
+        {
+            var room = ResolveFusionClient(Runner)?.CurrentRoom;
+            if (room == null) return;
+            room.PlayerTtl = 3600000;
+            room.EmptyRoomTtl = 60000;
+            room.IsOpen = true;
+            room.IsVisible = false;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Matched room setup skipped: {ex.Message}");
+        }
+    }
+
+    private void SealMatchRoom()
+    {
+        try
+        {
+            var room = ResolveFusionClient(Runner)?.CurrentRoom;
+            if (room == null) return;
+            room.IsOpen = false;
+            room.IsVisible = false;
+            // The seat stays through a locked screen. The match ends when a
+            // player leaves, not when the display turns off.
+            room.PlayerTtl = 3600000;
+            room.EmptyRoomTtl = 60000;
         }
         catch (Exception ex)
         {
@@ -1728,11 +2266,54 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
     }
 
+    private bool RoomBlocksNewOpponent()
+    {
+        if (Runner == null || !Runner.IsRunning) return true;
+
+        int active = 0;
+        foreach (var _ in Runner.ActivePlayers) active++;
+        if (active >= 2) return false;
+
+        var room = ResolveFusionClient(Runner)?.CurrentRoom;
+        if (room == null || room.Players == null) return false;
+
+        int inactive = 0;
+        foreach (var player in room.Players.Values)
+        {
+            if (player != null && player.IsInactive)
+                inactive++;
+        }
+
+        int max = room.MaxPlayers > 0 ? room.MaxPlayers : MaxPlayersPerRoom;
+        return inactive > 0 && active + inactive >= max;
+    }
+
+    private void CloseAndDropRoom()
+    {
+        try
+        {
+            var room = ResolveFusionClient(Runner)?.CurrentRoom;
+            if (room == null) return;
+            room.IsOpen = false;
+            room.IsVisible = false;
+            room.PlayerTtl = 0;
+            room.EmptyRoomTtl = 0;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning($"[MultiplayerManager] Room close skipped: {ex.Message}");
+        }
+    }
+
     private async void RejoinActiveSession()
     {
         if (_intentionalLeave || _isQuitting || string.IsNullOrEmpty(_sessionName)) return;
         if (isStartingGame || IsInSession) return;
-        if (_rejoinAttempts >= 3) return;
+        if (_rejoinAttempts >= 3)
+        {
+            FailLocalSession();
+            return;
+        }
 
         _rejoinAttempts++;
         isStartingGame = true;
@@ -1757,7 +2338,9 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             {
                 Debug.LogWarning($"[MultiplayerManager] Rejoin failed: {result.ShutdownReason}");
                 await ShutdownRunner();
-                retry = !_intentionalLeave && !_isQuitting;
+                retry = _rejoinAttempts < 3 && !_intentionalLeave && !_isQuitting;
+                if (!retry)
+                    FailLocalSession();
             }
             else
             {
@@ -1799,12 +2382,24 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             using (var unityPlayer = new AndroidJavaClass("com.unity3d.player.UnityPlayer"))
             using (var activity = unityPlayer.GetStatic<AndroidJavaObject>("currentActivity"))
             using (var context = activity.Call<AndroidJavaObject>("getApplicationContext"))
-            using (var power = context.Call<AndroidJavaObject>("getSystemService", "power"))
             {
-                // PARTIAL_WAKE_LOCK: CPU stays awake after the screen turns off.
-                _matchWakeLock = power.Call<AndroidJavaObject>("newWakeLock", 1, "Sudoku:Match");
-                _matchWakeLock.Call("setReferenceCounted", false);
-                _matchWakeLock.Call("acquire");
+                using (var power = context.Call<AndroidJavaObject>("getSystemService", "power"))
+                {
+                    // PARTIAL_WAKE_LOCK: CPU stays awake after the screen turns off.
+                    _matchWakeLock = power.Call<AndroidJavaObject>("newWakeLock", 1, "Sudoku:Match");
+                    _matchWakeLock.Call("setReferenceCounted", false);
+                    _matchWakeLock.Call("acquire");
+                }
+
+                using (var wifi = context.Call<AndroidJavaObject>("getSystemService", "wifi"))
+                {
+                    if (wifi != null)
+                    {
+                        _wifiLock = wifi.Call<AndroidJavaObject>("createWifiLock", 3, "Sudoku:MatchWifi");
+                        _wifiLock.Call("setReferenceCounted", false);
+                        _wifiLock.Call("acquire");
+                    }
+                }
             }
         }
         catch (Exception ex)
@@ -1817,11 +2412,13 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private void ReleaseMatchWakeLock()
     {
 #if UNITY_ANDROID && !UNITY_EDITOR
-        if (_matchWakeLock == null) return;
+        if (_matchWakeLock == null && _wifiLock == null) return;
         try
         {
-            if (_matchWakeLock.Call<bool>("isHeld"))
+            if (_matchWakeLock != null && _matchWakeLock.Call<bool>("isHeld"))
                 _matchWakeLock.Call("release");
+            if (_wifiLock != null && _wifiLock.Call<bool>("isHeld"))
+                _wifiLock.Call("release");
         }
         catch (Exception ex)
         {
@@ -1829,10 +2426,37 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         }
         finally
         {
-            _matchWakeLock.Dispose();
-            _matchWakeLock = null;
+            if (_matchWakeLock != null)
+            {
+                _matchWakeLock.Dispose();
+                _matchWakeLock = null;
+            }
+            if (_wifiLock != null)
+            {
+                _wifiLock.Dispose();
+                _wifiLock = null;
+            }
         }
 #endif
+    }
+
+    private void FailLocalSession()
+    {
+        if (_intentionalLeave || _isQuitting) return;
+        _needsRejoin = false;
+        _intentionalLeave = true;
+        IsMultiplayerGame = false;
+        waitingForOpponent = false;
+        OnLocalSessionLost?.Invoke();
+    }
+
+    private IEnumerator RejoinAfterDrop()
+    {
+        yield return null;
+        _rejoinRoutine = null;
+        if (!_needsRejoin || _intentionalLeave || _isQuitting) yield break;
+        _needsRejoin = false;
+        RejoinActiveSession();
     }
 
     void INetworkRunnerCallbacks.OnPlayerLeft(NetworkRunner runner, PlayerRef player)
@@ -1844,11 +2468,18 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             _opponentLeftWhileAway = true;
             return;
         }
-        OnOpponentLeft?.Invoke();
+        if (waitingForOpponent && !_opponentSeenInRoom) return;
+        if (OpponentBackgrounded)
+            return;
+        _departureConfirmAt = Time.unscaledTime + OpponentMissingGraceSeconds;
     }
 
     void INetworkRunnerCallbacks.OnConnectedToServer(NetworkRunner runner) { }
-    void INetworkRunnerCallbacks.OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason) { }
+    void INetworkRunnerCallbacks.OnDisconnectedFromServer(NetworkRunner runner, NetDisconnectReason reason)
+    {
+        if (runner != Runner || _intentionalLeave || _isQuitting) return;
+        Debug.LogWarning($"[MultiplayerManager] Disconnected from server: {reason}");
+    }
     void INetworkRunnerCallbacks.OnConnectRequest(NetworkRunner runner, NetworkRunnerCallbackArgs.ConnectRequest request, byte[] token) { }
     void INetworkRunnerCallbacks.OnConnectFailed(NetworkRunner runner, NetAddress remoteAddress, NetConnectFailedReason reason)
     {
@@ -1869,9 +2500,16 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     void INetworkRunnerCallbacks.OnSceneLoadDone(NetworkRunner runner)
     {
         if (runner == Runner && IsInSession)
+        {
             BroadcastIdentity();
+            DeliverAvatarSoon(true);
+        }
     }
-    void INetworkRunnerCallbacks.OnSceneLoadStart(NetworkRunner runner) { }
+    void INetworkRunnerCallbacks.OnSceneLoadStart(NetworkRunner runner)
+    {
+        if (runner == Runner && !waitingForOpponent)
+            SealMatchRoom();
+    }
     void INetworkRunnerCallbacks.OnObjectExitAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
     void INetworkRunnerCallbacks.OnObjectEnterAOI(NetworkRunner runner, NetworkObject obj, PlayerRef player) { }
     void INetworkRunnerCallbacks.OnReliableDataReceived(NetworkRunner runner, PlayerRef player, ReliableKey key, System.ReadOnlySpan<byte> data)
@@ -1886,7 +2524,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (keyId == 6)
         {
-            ApplyOpponentAvatarBytes(data.ToArray());
+            AcceptAvatarChunk(unusedB, unusedC, unusedD, data.ToArray());
             return;
         }
 
@@ -1921,8 +2559,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             }
             if (parts.Length > 3)
             {
-                string url = parts[3].Trim();
-                if (!string.Equals(OpponentAvatarUrl, url, StringComparison.Ordinal))
+                string url = ProfileManager.HighResolutionPhotoUrl(parts[3].Trim());
+                if (!string.IsNullOrEmpty(url) && !string.Equals(OpponentAvatarUrl, url, StringComparison.Ordinal))
                 {
                     OpponentAvatarUrl = url;
                     changed = true;
@@ -1969,6 +2607,11 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         else if (keyId == 3)
         {
             OpponentBackgrounded = payload.Trim() == "1";
+            if (OpponentBackgrounded)
+            {
+                _departureConfirmAt = -1f;
+                _opponentMissingSince = -1f;
+            }
         }
         else if (keyId == 5)
         {
@@ -2002,14 +2645,26 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             }
         }
     }
-    void INetworkRunnerCallbacks.OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress) { }
+    private int _ackChunk = -1;
+
+    void INetworkRunnerCallbacks.OnReliableDataProgress(NetworkRunner runner, PlayerRef player, ReliableKey key, float progress)
+    {
+        if (progress < 1f) return;
+        key.GetInts(out int keyId, out int index, out _, out _);
+        if (keyId == 6)
+            _ackChunk = index;
+    }
     void INetworkRunnerCallbacks.OnInput(NetworkRunner runner, NetworkInput input) { }
     void INetworkRunnerCallbacks.OnInputMissing(NetworkRunner runner, PlayerRef player, NetworkInput input) { }
     void INetworkRunnerCallbacks.OnShutdown(NetworkRunner runner, ShutdownReason shutdownReason)
     {
         bool ours = Runner == runner;
         if (ours) Runner = null;
-        if (!ours || _intentionalLeave || _isQuitting || !_backgrounded || !IsMultiplayerGame) return;
+        if (!ours || _intentionalLeave || _isQuitting || isStartingGame) return;
+        if (!IsMultiplayerGame || string.IsNullOrEmpty(_sessionName)) return;
         _needsRejoin = true;
+        if (_backgrounded) return;
+        if (_rejoinRoutine == null)
+            _rejoinRoutine = StartCoroutine(RejoinAfterDrop());
     }
 }
