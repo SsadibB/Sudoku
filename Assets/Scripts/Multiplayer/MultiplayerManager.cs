@@ -127,7 +127,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private bool _opponentDepartureNotified;
     private Coroutine _rejoinRoutine;
     private const float OpponentMissingGraceSeconds = 12f;
-    private const int SharpAvatarMaxBytes = 48000;
+    private const int SharpAvatarMaxBytes = 16000;
+    private const int NetworkedThumbnailMaxBytes = 1024;
     private int seenAvatarCount = -1;
     private int seenAvatarChecksum;
     private int opponentAvatarPixels;
@@ -1276,6 +1277,24 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
                 OpponentAvatarIndex = index;
                 changed = true;
             }
+
+            int count = remote.AvatarByteCount;
+            if (count >= 32 && count <= remote.AvatarJpeg.Length)
+            {
+                int checksum = count;
+                for (int i = 0; i < count; i += 17)
+                    checksum = (checksum * 33) ^ remote.AvatarJpeg[i];
+                if (count != seenAvatarCount || checksum != seenAvatarChecksum)
+                {
+                    seenAvatarCount = count;
+                    seenAvatarChecksum = checksum;
+                    byte[] jpg = new byte[count];
+                    for (int i = 0; i < count; i++)
+                        jpg[i] = remote.AvatarJpeg[i];
+                    if (ApplyOpponentAvatarBytes(jpg, false))
+                        changed = true;
+                }
+            }
         }
         catch
         {
@@ -1399,32 +1418,18 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         _avatarSendRoutine = null;
     }
 
-    // One full photo is larger than a single Fusion message, so the portrait
-    // was dropped and the other phone kept an empty circle. Small pieces arrive.
+    // Fusion only keeps a few concurrent reliable transfers. Sending ~90 unique
+    // keys at once was dropped, so the other device never assembled the photo.
+    // One SendReliableDataToPlayer lets Fusion fragment the JPEG itself.
+    // Older clients still accept a raw JPEG (SOI FF D8) in AcceptAvatarChunk.
     private IEnumerator SendAvatarChunks()
     {
         byte[] jpg = localAvatarJpeg;
         if (jpg == null || jpg.Length < 32 || !IsInSession) yield break;
 
-        const int chunkSize = 480;
-        int total = (jpg.Length + chunkSize - 1) / chunkSize;
-        for (int i = 0; i < total; i++)
-        {
-            int offset = i * chunkSize;
-            int count = Math.Min(chunkSize, jpg.Length - offset);
-            byte[] packet = new byte[count + 3];
-            packet[0] = 0xA7;
-            packet[1] = (byte)i;
-            packet[2] = (byte)total;
-            Buffer.BlockCopy(jpg, offset, packet, 3, count);
-            SendToOthers(ReliableKey.FromInts(6, i + 1, total, jpg.Length), packet);
-            float waited = 0f;
-            while (_ackChunk != i + 1 && waited < 0.2f)
-            {
-                waited += Time.unscaledDeltaTime;
-                yield return null;
-            }
-        }
+        SendToOthers(AvatarImageKey, jpg);
+        Debug.Log("[MultiplayerManager] Avatar sent: 1 transfer, " + jpg.Length + " bytes");
+        yield return null;
     }
 
     private void EnsureAvatarEncoded()
@@ -1434,7 +1439,11 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         if (source == null) return;
 
         int sourceId = source.GetInstanceID();
-        if (localAvatarJpeg != null && _avatarSourceId == sourceId) return;
+        if (localAvatarJpeg != null && _avatarSourceId == sourceId)
+        {
+            PublishCachedAvatar();
+            return;
+        }
 
         _avatarSourceId = sourceId;
         if (_avatarSendRoutine != null)
@@ -1443,14 +1452,24 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             _avatarSendRoutine = null;
         }
 
-        int native = Mathf.Max(source.width, source.height);
-        int first = Mathf.Clamp(native, 192, 384);
         localAvatarJpeg = EncodeAvatarThatFits(
             source,
             sprite,
-            new[] { first, 320, 256, 192 },
-            new[] { 85, 75, 65 },
+            new[] { 256, 192, 160 },
+            new[] { 70, 55, 40 },
             SharpAvatarMaxBytes);
+        localAvatarThumbnail = EncodeAvatarThatFits(
+            source,
+            sprite,
+            new[] { 96, 72, 64 },
+            new[] { 45, 35, 25 },
+            NetworkedThumbnailMaxBytes);
+        if (localAvatarJpeg == null)
+            localAvatarJpeg = localAvatarThumbnail;
+        if (localAvatarJpeg == null)
+            Debug.LogWarning("[MultiplayerManager] Avatar encode failed (sprite not readable or JPEG too large).");
+        else
+            PublishCachedAvatar();
     }
 
     private void SendAvatarImage()
@@ -1622,6 +1641,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             write += _avatarChunks[i].Length;
         }
 
+        Debug.Log("[MultiplayerManager] Opponent avatar received: " + jpg.Length + " bytes");
         ApplyOpponentAvatarBytes(jpg, true);
     }
 
@@ -2524,6 +2544,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
         if (keyId == 6)
         {
+            Debug.Log("[MultiplayerManager] Avatar packet received: " + data.Length + " bytes");
             AcceptAvatarChunk(unusedB, unusedC, unusedD, data.ToArray());
             return;
         }
