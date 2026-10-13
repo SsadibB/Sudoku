@@ -122,8 +122,8 @@ public class MultiplayerResultPanel : MonoBehaviour
         mp?.CaptureResultSnapshot();
         if (mp != null && mp.ResultCaptured)
         {
-            shownLocalTime = mp.LocalDisplayTime;
-            shownRemoteTime = mp.RemoteDisplayTime;
+            shownLocalTime = mp.SharedDisplaySeconds;
+            shownRemoteTime = shownLocalTime;
             shownLocalScore = mp.SnapshotLocalScore;
             shownRemoteScore = mp.SnapshotRemoteScore;
             shownLocalLives = mp.SnapshotLocalLives;

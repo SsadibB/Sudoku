@@ -136,6 +136,8 @@ public class SudokuGameManager : MonoBehaviour
     [SerializeField] private GameObject loadingPanel;
     [SerializeField] private Image loadingFill;
     [SerializeField] private float loadingDuration = 1.7f;
+    private TMP_Text _loadingLabel;
+    private string _loadingLabelBase = "LOADING";
 
     [Header("Revive Panel (single player)")]
     [SerializeField] private GameObject revivePanel;
@@ -348,6 +350,7 @@ public class SudokuGameManager : MonoBehaviour
                 elapsed += Time.unscaledDeltaTime;
                 if (loadingFill != null)
                     loadingFill.fillAmount = Mathf.Clamp01(elapsed / duration);
+                TickLoadingDots();
                 yield return null;
             }
 
@@ -378,6 +381,7 @@ public class SudokuGameManager : MonoBehaviour
                 break;
             if (loadingFill != null)
                 loadingFill.fillAmount = CreepingLoadFill(waited, duration);
+            TickLoadingDots();
             yield return null;
         }
 
@@ -395,18 +399,68 @@ public class SudokuGameManager : MonoBehaviour
 
         if (!mp.MatchClockArmed)
             mp.ArmMatchClockNow();
-        if (loadingFill != null) loadingFill.fillAmount = 1f;
+        yield return FinishLoadingBar();
         if (loadingPanel != null)
             loadingPanel.SetActive(false);
     }
 
+    // Spread the bar across the wait. The previous curve reached 90% in under
+    // two seconds and then sat there until the match was actually ready.
     private static float CreepingLoadFill(float elapsed, float pace)
     {
-        float span = Mathf.Max(0.4f, pace);
-        if (elapsed <= span)
-            return (elapsed / span) * 0.9f;
-        float extra = elapsed - span;
-        return 0.9f + 0.09f * (extra / (extra + 1.5f));
+        float span = Mathf.Max(6f, pace * 4f);
+        float t = Mathf.Clamp01(elapsed / span);
+        float eased = t * t * (3f - 2f * t);
+        float head = eased * 0.78f;
+        float extra = Mathf.Max(0f, elapsed - span);
+        float tail = 0.14f * (1f - Mathf.Exp(-extra / 14f));
+        return Mathf.Clamp(head + tail, 0f, 0.92f);
+    }
+
+    private IEnumerator FinishLoadingBar()
+    {
+        float from = loadingFill != null ? loadingFill.fillAmount : 1f;
+        float settle = 0f;
+        const float settleTime = 0.35f;
+        while (settle < settleTime)
+        {
+            settle += Time.unscaledDeltaTime;
+            if (loadingFill != null)
+                loadingFill.fillAmount = Mathf.Lerp(from, 1f, Mathf.Clamp01(settle / settleTime));
+            TickLoadingDots();
+            yield return null;
+        }
+
+        if (loadingFill != null)
+            loadingFill.fillAmount = 1f;
+    }
+
+    private void TickLoadingDots()
+    {
+        CacheLoadingLabel();
+        if (_loadingLabel == null) return;
+        int dots = ((int)(Time.unscaledTime / 0.4f) % 3) + 1;
+        _loadingLabel.text = _loadingLabelBase + new string('.', dots);
+    }
+
+    private void CacheLoadingLabel()
+    {
+        if (_loadingLabel != null || loadingPanel == null) return;
+        TMP_Text[] texts = loadingPanel.GetComponentsInChildren<TMP_Text>(true);
+        for (int i = 0; i < texts.Length; i++)
+        {
+            TMP_Text label = texts[i];
+            if (label == null) continue;
+            bool named = label.transform.parent != null && label.transform.parent.name == "LoadingText";
+            string value = label.text != null ? label.text.Trim() : "";
+            if (!named && !value.StartsWith("LOADING", StringComparison.OrdinalIgnoreCase))
+                continue;
+            _loadingLabel = label;
+            string trimmed = value.TrimEnd('.');
+            if (!string.IsNullOrEmpty(trimmed))
+                _loadingLabelBase = trimmed;
+            return;
+        }
     }
 
     // The level picker is a single-player control. Multiplayer still uses the

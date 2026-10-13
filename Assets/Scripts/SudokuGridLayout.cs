@@ -64,6 +64,11 @@ public class SudokuGridLayout : MonoBehaviour
     private float calculatedCellSide = 85f;
     private float calculatedFontSize = 50f;
 
+    public Color CellDefaultBgColor => cellDefaultBgColor;
+    public Color CellAltBoxBgColor => cellAltBoxBgColor;
+    public Color CellTextColor => cellTextColor;
+    public TMP_FontAsset CellFontAsset => cellFontAsset;
+
     public float SubBoxSpacingX
     {
         get => subBoxSpacingX;

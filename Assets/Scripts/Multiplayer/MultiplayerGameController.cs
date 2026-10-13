@@ -505,8 +505,8 @@ public class MultiplayerGameController : MonoBehaviour
         if (gameManager != null && gameManager.IsGameActive)
             gameManager.EndGameForMultiplayer();
 
-        float shown = mp != null && mp.ResultCaptured
-            ? mp.LocalDisplayTime
+        float shown = mp != null && mp.IsInSession
+            ? mp.SharedDisplaySeconds
             : (gameManager != null ? gameManager.ElapsedSeconds : Mathf.Max(0f, elapsed));
         NetworkSudokuPlayer.Local?.FreezeClock(shown);
 
@@ -616,6 +616,7 @@ public class MultiplayerGameController : MonoBehaviour
 
     private Transform playerSide;
     private Transform opponentSide;
+    private TMP_Text matchTimeText;
 
     private void BindMatchHud(bool isMultiplayer)
     {
@@ -630,8 +631,20 @@ public class MultiplayerGameController : MonoBehaviour
 
         playerSide = multi.Find("Contents/PlayerSide");
         opponentSide = multi.Find("Contents/OpponentSide");
+        Transform sharedTime = multi.Find("Contents/Versus/TimeStats");
+        if (sharedTime == null) sharedTime = FindChild(multi, "TimeStats");
+        matchTimeText = sharedTime != null ? FindText(sharedTime, "TimeValue_Text (TMP)") : null;
+        HideOpponentTimeStats();
         CacheOutputOpponentStats();
         RefreshMatchHud(0f);
+    }
+
+    private void HideOpponentTimeStats()
+    {
+        if (opponentSide == null) return;
+        Transform extra = FindChild(opponentSide, "TimeStats");
+        if (extra != null && extra.gameObject.activeSelf)
+            extra.gameObject.SetActive(false);
     }
 
     private static bool RemoteClockStopped(NetworkSudokuPlayer remote)
@@ -715,13 +728,15 @@ public class MultiplayerGameController : MonoBehaviour
         int localScore = frozen
             ? mp.SnapshotLocalScore
             : (gameManager != null ? gameManager.SessionScore : (local != null ? local.Score : 0));
-        if (frozen)
+        HideOpponentTimeStats();
+        if (mp != null && mp.IsInSession)
+            elapsed = mp.SharedDisplaySeconds;
+        else if (frozen && mp != null)
             elapsed = mp.LocalDisplayTime;
-        else if (mp != null && mp.IsInSession && !mp.MatchClockArmed)
-            elapsed = 0f;
-        else if (mp != null && mp.HasSharedClock)
-            elapsed = mp.SharedElapsed;
         Sprite localAvatar = ProfileManager.Instance != null ? ProfileManager.Instance.CurrentAvatarSprite : null;
+
+        if (matchTimeText != null)
+            matchTimeText.text = FormatClock(elapsed);
 
         if (playerSide != null)
             ApplySide(playerSide, localName, localLevel, localScore, elapsed, localLives, localAvatar, false);
@@ -738,9 +753,7 @@ public class MultiplayerGameController : MonoBehaviour
             ? mp.SnapshotRemoteScore
             : (remote != null ? remote.Score : (mp != null ? mp.OpponentLiveScore : 0));
         float remoteTime = elapsed;
-        if (frozen)
-            remoteTime = mp.RemoteDisplayTime;
-        else if (RemoteClockStopped(remote))
+        if (RemoteClockStopped(remote))
             remoteTime = StoppedRemoteTime(remote, elapsed);
         int remoteLives = frozen
             ? mp.SnapshotRemoteLives

@@ -67,6 +67,13 @@ public class OpponentBoardPanel : MonoBehaviour
     [Header("Animation")]
     [SerializeField] private float animDuration = 0.35f;
 
+    // Copied from the live game board so both boards share one look.
+    private static readonly Color boardFrameColor = new Color(0.157f, 0.212f, 0.31f, 1f); // BoardBG fill
+    private Sprite cellSprite;
+    private TMP_FontAsset cellFont;
+    private Color altBoxCellColor;
+    private bool themeMatched;
+
     // 81 cell Image and Text references (ordered row-major: r*9 + c)
     private Image[] cellImages;
     private TMP_Text[] cellTexts;
@@ -150,9 +157,43 @@ public class OpponentBoardPanel : MonoBehaviour
         }
 
         CaptureDefaultTransform();
+        MatchGameBoardTheme();
         BuildMiniGrid();
         MarkFixedCells();
         ApplyColorTheme();
+    }
+
+    private void MatchGameBoardTheme()
+    {
+        altBoxCellColor = emptyCellColor;
+        var board = FindAnyObjectByType<SudokuGridLayout>();
+        if (board == null) return;
+
+        emptyCellColor = board.CellDefaultBgColor;
+        altBoxCellColor = board.CellAltBoxBgColor;
+        fixedCellColor = emptyCellColor;
+        fixedTextColor = board.CellTextColor;
+        completedCellColor = new Color(0.80f, 0.93f, 0.78f, 1f);
+        completedTextColor = new Color(0.18f, 0.55f, 0.18f, 1f);
+        wrongCellColor = new Color(1f, 0.84f, 0.84f, 1f);
+        wrongTextColor = new Color(0.85f, 0.15f, 0.15f, 1f);
+        boxBorderColor = Color.clear;
+        gridBgColor = Color.clear;
+        panelBgColor = new Color(0.03f, 0.05f, 0.09f, 0.72f);
+        cellFont = board.CellFontAsset;
+
+        if (board.Cells != null && board.Cells[0, 0] != null)
+        {
+            var cell = board.Cells[0, 0].GetComponent<Image>();
+            if (cell != null) cellSprite = cell.sprite;
+        }
+        themeMatched = true;
+    }
+
+    private Color BaseCellColor(int row, int col)
+    {
+        bool altBox = ((row / 3) + (col / 3)) % 2 != 0;
+        return altBox ? altBoxCellColor : emptyCellColor;
     }
 
     // ---- Public toggle / show / hide ----
@@ -379,9 +420,34 @@ public class OpponentBoardPanel : MonoBehaviour
         RefreshDisplay();
     }
 
+    private NetworkSudokuPlayer _foundRemote;
+    private float _nextRemoteSearch;
+
+    private NetworkSudokuPlayer ResolveRemote()
+    {
+        if (NetworkSudokuPlayer.Remote != null) return NetworkSudokuPlayer.Remote;
+        if (_foundRemote != null && _foundRemote.Object != null && _foundRemote.Object.IsValid)
+            return _foundRemote;
+        if (Time.unscaledTime < _nextRemoteSearch) return null;
+        _nextRemoteSearch = Time.unscaledTime + 0.5f;
+
+        _foundRemote = null;
+        var players = FindObjectsByType<NetworkSudokuPlayer>(FindObjectsInactive.Exclude);
+        for (int i = 0; i < players.Length; i++)
+        {
+            var p = players[i];
+            if (p != null && p != NetworkSudokuPlayer.Local && p.Object != null && p.Object.IsValid && !p.HasStateAuthority)
+            {
+                _foundRemote = p;
+                break;
+            }
+        }
+        return _foundRemote;
+    }
+
     public void RefreshDisplay()
     {
-        var remote = NetworkSudokuPlayer.Remote;
+        var remote = ResolveRemote();
 
         // Header texts
         if (remote != null)
@@ -426,7 +492,8 @@ public class OpponentBoardPanel : MonoBehaviour
         {
             if (opponentNameText != null)
             {
-                opponentNameText.text = "Opponent";
+                string known = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentName : null;
+                opponentNameText.text = string.IsNullOrWhiteSpace(known) ? "Opponent" : ProfileManager.ShortDisplayName(known);
                 opponentNameText.color = headerNameColor;
             }
 
@@ -493,7 +560,7 @@ public class OpponentBoardPanel : MonoBehaviour
                 // so the local player cannot read and copy the opponent's answer.
                 if (num == 0)
                 {
-                    cellImages[i].color = emptyCellColor;
+                    cellImages[i].color = themeMatched ? BaseCellColor(r, c) : emptyCellColor;
                     if (cellTexts[i] != null)
                         cellTexts[i].text = "";
                 }
@@ -505,7 +572,7 @@ public class OpponentBoardPanel : MonoBehaviour
                         cellTexts[i].text = num.ToString();
                         cellTexts[i].color = fixedTextColor;
                     }
-                    cellImages[i].color = fixedCellColor;
+                    cellImages[i].color = themeMatched ? BaseCellColor(r, c) : fixedCellColor;
                 }
                 else if (isWrong)
                 {
@@ -568,6 +635,7 @@ public class OpponentBoardPanel : MonoBehaviour
 
                 Image boxBg = boxGO.AddComponent<Image>();
                 boxBg.color = boxBorderColor;
+                boxBg.raycastTarget = false;
 
                 GridLayoutGroup innerGrid = boxGO.AddComponent<GridLayoutGroup>();
                 innerGrid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
@@ -589,7 +657,9 @@ public class OpponentBoardPanel : MonoBehaviour
                         cellGO.transform.SetParent(boxGO.transform, false);
 
                         Image cellImg = cellGO.AddComponent<Image>();
-                        cellImg.color = emptyCellColor;
+                        if (cellSprite != null) cellImg.sprite = cellSprite;
+                        cellImg.color = themeMatched ? BaseCellColor(globalRow, globalCol) : emptyCellColor;
+                        cellImg.raycastTarget = false;
                         cellImages[idx] = cellImg;
 
                         GameObject textGO = new GameObject("Number", typeof(RectTransform));
@@ -602,6 +672,8 @@ public class OpponentBoardPanel : MonoBehaviour
                         textRT.offsetMax = Vector2.zero;
 
                         TextMeshProUGUI tmp = textGO.AddComponent<TextMeshProUGUI>();
+                        if (cellFont != null) tmp.font = cellFont;
+                        tmp.raycastTarget = false;
                         tmp.alignment = TextAlignmentOptions.Center;
                         tmp.enableAutoSizing = true;
                         tmp.fontSizeMin = 20f;
@@ -627,10 +699,10 @@ public class OpponentBoardPanel : MonoBehaviour
             foreach (var img in panelRoot.GetComponentsInChildren<Image>(true))
             {
                 string n = img.gameObject.name;
-                if (n == "Card" || n == "PanelRoot" || n == "OpponentBoardPanel")
-                {
+                if (n == "Card")
+                    img.color = themeMatched ? boardFrameColor : panelBgColor;
+                else if (n == "PanelRoot" || n == "OpponentBoardPanel")
                     img.color = panelBgColor;
-                }
             }
         }
 

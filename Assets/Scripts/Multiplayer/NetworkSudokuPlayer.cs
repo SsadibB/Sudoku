@@ -50,7 +50,11 @@ public class NetworkSudokuPlayer : NetworkBehaviour
     [Networked] public int ProfileLevel { get; set; }
     [Networked] public int AvatarIndex { get; set; }
     [Networked] public int AvatarByteCount { get; set; }
-    [Networked, Capacity(1024)] public NetworkArray<byte> AvatarJpeg { get; }
+    // Fusion stores every array element in a full 4-byte word, so the thumbnail is packed
+    // 4 bytes per int. Keep this at 1024 words: larger buffers overflow the 32 KB heap page
+    // and the player object never spawns.
+    [Networked, Capacity(1024)] public NetworkArray<int> AvatarWords { get; }
+    public const int AvatarCapacityBytes = 1024 * 4;
     [Networked] public int MatchEpoch { get; set; }
     [Networked] public NetworkBool WantsRematch { get; set; }
 
@@ -217,20 +221,40 @@ public class NetworkSudokuPlayer : NetworkBehaviour
 
     public void PublishAvatarJpeg(byte[] jpg)
     {
-        if (jpg == null || jpg.Length < 32) return;
+        if (jpg == null || jpg.Length < 32 || jpg.Length > AvatarCapacityBytes) return;
         if (Object == null || !Object.IsValid || !HasStateAuthority) return;
 
         try
         {
-            int count = Mathf.Min(jpg.Length, AvatarJpeg.Length);
-            for (int i = 0; i < count; i++)
-                AvatarJpeg.Set(i, jpg[i]);
-            AvatarByteCount = count;
+            int words = (jpg.Length + 3) / 4;
+            for (int w = 0; w < words; w++)
+            {
+                int packed = 0;
+                for (int b = 0; b < 4; b++)
+                {
+                    int i = w * 4 + b;
+                    if (i < jpg.Length)
+                        packed |= jpg[i] << (b * 8);
+                }
+                AvatarWords.Set(w, packed);
+            }
+            AvatarByteCount = jpg.Length;
         }
         catch (Exception ex)
         {
             Debug.LogWarning("[NetworkSudokuPlayer] Avatar publish skipped: " + ex.Message);
         }
+    }
+
+    public byte[] ReadAvatarJpeg()
+    {
+        int count = AvatarByteCount;
+        if (count < 32 || count > AvatarCapacityBytes) return null;
+
+        byte[] jpg = new byte[count];
+        for (int i = 0; i < count; i++)
+            jpg[i] = (byte)(AvatarWords[i / 4] >> ((i % 4) * 8));
+        return jpg;
     }
 
     public void SetWantsRematch(bool wants)

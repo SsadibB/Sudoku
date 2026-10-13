@@ -116,6 +116,7 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private int _avatarSourceId = int.MinValue;
     private Coroutine _avatarSendRoutine;
     private int _avatarBursts;
+    private int _avatarImageStamp;
     private byte[][] _avatarChunks;
     private int _avatarChunkTotal;
     private int _avatarChunkStamp;
@@ -127,8 +128,8 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private bool _opponentDepartureNotified;
     private Coroutine _rejoinRoutine;
     private const float OpponentMissingGraceSeconds = 12f;
-    private const int SharpAvatarMaxBytes = 16000;
-    private const int NetworkedThumbnailMaxBytes = 1024;
+    private const int SharpAvatarMaxBytes = 42000;
+    private const int NetworkedThumbnailMaxBytes = NetworkSudokuPlayer.AvatarCapacityBytes;
     private int seenAvatarCount = -1;
     private int seenAvatarChecksum;
     private int opponentAvatarPixels;
@@ -222,6 +223,45 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     public float LocalDisplayTime => _localFrozenElapsed >= 0f ? _localFrozenElapsed : SharedElapsed;
     public float RemoteDisplayTime => _remoteFrozenElapsed >= 0f ? _remoteFrozenElapsed : SharedElapsed;
+
+    /// <summary>
+    /// Whole seconds both devices should print. The master client's published
+    /// second is the one number, so the two phones do not each count their own clock.
+    /// </summary>
+    public int SharedDisplaySeconds
+    {
+        get
+        {
+            if (!_matchClockArmed)
+                return 0;
+
+            int masterSecond = ReadMasterWholeSecond();
+            if (masterSecond >= 0)
+                return masterSecond;
+
+            float fallback = ResultCaptured && _localFrozenElapsed >= 0f ? _localFrozenElapsed : SharedElapsed;
+            return Mathf.Max(0, Mathf.FloorToInt(fallback));
+        }
+    }
+
+    private int ReadMasterWholeSecond()
+    {
+        bool master = Runner != null && Runner.IsRunning && Runner.IsSharedModeMasterClient;
+        NetworkSudokuPlayer source = master ? NetworkSudokuPlayer.Local : NetworkSudokuPlayer.Remote;
+        if (source == null || source.Object == null || !source.Object.IsValid)
+            return -1;
+        try
+        {
+            int whole = source.ElapsedWholeSeconds;
+            if (whole > 0 && whole < 21600)
+                return whole;
+        }
+        catch
+        {
+            // The networked clock can be unread for a frame while the player spawns.
+        }
+        return -1;
+    }
     public bool ResultCaptured { get; private set; }
     public int SnapshotLocalScore { get; private set; }
     public int SnapshotRemoteScore { get; private set; }
@@ -1279,20 +1319,22 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             }
 
             int count = remote.AvatarByteCount;
-            if (count >= 32 && count <= remote.AvatarJpeg.Length)
+            if (count >= 32 && count <= NetworkSudokuPlayer.AvatarCapacityBytes)
             {
+                int words = (count + 3) / 4;
                 int checksum = count;
-                for (int i = 0; i < count; i += 17)
-                    checksum = (checksum * 33) ^ remote.AvatarJpeg[i];
+                for (int w = 0; w < words; w += 5)
+                    checksum = (checksum * 33) ^ remote.AvatarWords[w];
                 if (count != seenAvatarCount || checksum != seenAvatarChecksum)
                 {
-                    seenAvatarCount = count;
-                    seenAvatarChecksum = checksum;
-                    byte[] jpg = new byte[count];
-                    for (int i = 0; i < count; i++)
-                        jpg[i] = remote.AvatarJpeg[i];
-                    if (ApplyOpponentAvatarBytes(jpg, false))
-                        changed = true;
+                    byte[] jpg = remote.ReadAvatarJpeg();
+                    if (jpg != null)
+                    {
+                        seenAvatarCount = count;
+                        seenAvatarChecksum = checksum;
+                        if (ApplyOpponentAvatarBytes(jpg, false))
+                            changed = true;
+                    }
                 }
             }
         }
@@ -1398,8 +1440,11 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private void DeliverAvatarSoon(bool force = false)
     {
+        int sourceBefore = _avatarSourceId;
         EnsureAvatarEncoded();
-        if (force)
+        // A connected-account photo often arrives after the first bursts already
+        // went out as a preset. Those bursts must not swallow the real photo.
+        if (force || _avatarSourceId != sourceBefore)
             _avatarBursts = 0;
         if (localAvatarJpeg == null || _avatarSendRoutine != null || _avatarBursts >= 3) return;
         _avatarBursts++;
@@ -1410,26 +1455,50 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     {
         for (int pass = 0; pass < 2; pass++)
         {
-            yield return SendAvatarChunks();
+            yield return SendAvatarChunks(pass == 0);
             if (pass == 0)
-                yield return new WaitForSecondsRealtime(1.5f);
+                yield return new WaitForSecondsRealtime(0.4f);
         }
 
         _avatarSendRoutine = null;
     }
 
-    // Fusion only keeps a few concurrent reliable transfers. Sending ~90 unique
-    // keys at once was dropped, so the other device never assembled the photo.
-    // One SendReliableDataToPlayer lets Fusion fragment the JPEG itself.
+    // Fusion 1 drops GameReliable packets once the send window is full
+    // ("Not sending: GameReliable packets in the send window"). Both players
+    // pushing a 16KB account photo at match start fills one direction and
+    // that opponent is left with a blank portrait. Preset avatars hide this
+    // because they sync as an index. Pace one small chunk at a time instead.
     // Older clients still accept a raw JPEG (SOI FF D8) in AcceptAvatarChunk.
-    private IEnumerator SendAvatarChunks()
+    private IEnumerator SendAvatarChunks(bool stagger)
     {
         byte[] jpg = localAvatarJpeg;
         if (jpg == null || jpg.Length < 32 || !IsInSession) yield break;
 
-        SendToOthers(AvatarImageKey, jpg);
-        Debug.Log("[MultiplayerManager] Avatar sent: 1 transfer, " + jpg.Length + " bytes");
-        yield return null;
+        PublishCachedAvatar();
+        if (stagger && Runner != null && Runner.IsRunning && !Runner.IsSharedModeMasterClient)
+            yield return new WaitForSecondsRealtime(0.45f);
+
+        const int chunkSize = 900;
+        int total = (jpg.Length + chunkSize - 1) / chunkSize;
+        if (total > 120) yield break;
+
+        _avatarImageStamp = _avatarImageStamp >= 65535 ? 1 : _avatarImageStamp + 1;
+        int stamp = _avatarImageStamp;
+        for (int index = 0; index < total; index++)
+        {
+            if (!IsInSession || localAvatarJpeg != jpg) yield break;
+
+            int length = Math.Min(chunkSize, jpg.Length - index * chunkSize);
+            byte[] packet = new byte[length + 3];
+            packet[0] = 0xA7;
+            packet[1] = (byte)index;
+            packet[2] = (byte)total;
+            Buffer.BlockCopy(jpg, index * chunkSize, packet, 3, length);
+            SendToOthers(ReliableKey.FromInts(6, index, total, stamp), packet);
+            yield return new WaitForSecondsRealtime(0.1f);
+        }
+
+        Debug.Log("[MultiplayerManager] Avatar sent: " + total + " chunks, " + jpg.Length + " bytes");
     }
 
     private void EnsureAvatarEncoded()
@@ -1455,15 +1524,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         localAvatarJpeg = EncodeAvatarThatFits(
             source,
             sprite,
-            new[] { 256, 192, 160 },
-            new[] { 70, 55, 40 },
+            new[] { 512, 384, 320, 256 },
+            new[] { 82, 70, 58 },
             SharpAvatarMaxBytes);
+        // This copy is what the other device can draw before the sharp photo
+        // arrives. It has to stay large enough for a 150px circle.
         localAvatarThumbnail = EncodeAvatarThatFits(
             source,
             sprite,
-            new[] { 96, 72, 64 },
-            new[] { 45, 35, 25 },
+            new[] { 160, 128, 112, 96 },
+            new[] { 72, 60, 48, 36 },
             NetworkedThumbnailMaxBytes);
+        if (localAvatarThumbnail == null && localAvatarJpeg != null && localAvatarJpeg.Length <= NetworkedThumbnailMaxBytes)
+            localAvatarThumbnail = localAvatarJpeg;
         if (localAvatarJpeg == null)
             localAvatarJpeg = localAvatarThumbnail;
         if (localAvatarJpeg == null)
@@ -1610,14 +1683,19 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
             piece = raw;
         }
 
+        int imageStamp = stamp != 0 ? stamp : total;
+        // A late chunk from the previous pass must not wipe the new assembly.
+        if (_avatarChunkStamp != 0 && imageStamp < _avatarChunkStamp)
+            return;
+
         if (total <= 1)
         {
+            _avatarChunkStamp = imageStamp;
             ApplyOpponentAvatarBytes(piece, true);
             return;
         }
         if (total > 128 || index < 0 || index >= total) return;
 
-        int imageStamp = stamp != 0 ? stamp : total;
         if (_avatarChunkStamp != imageStamp || _avatarChunks == null || _avatarChunkTotal != total)
         {
             _avatarChunkStamp = imageStamp;
@@ -1704,17 +1782,58 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
     private static Texture2D CopyReadableTexture(Texture2D source)
     {
         if (source == null) return null;
+        if (source.isReadable)
+        {
+            Texture2D copy = null;
+            try
+            {
+                copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+                copy.SetPixels(source.GetPixels());
+                copy.Apply(false, false);
+                return copy;
+            }
+            catch (Exception ex)
+            {
+                Debug.LogWarning("[MultiplayerManager] Opponent photo pixel copy skipped: " + ex.Message);
+                if (copy != null)
+                    Destroy(copy);
+            }
+        }
+
+        // Account photos from Google and Facebook often decode to a texture
+        // GetPixels cannot read. Blit keeps a copy the request will not destroy.
+        return BlitReadableTexture(source);
+    }
+
+    private static Texture2D BlitReadableTexture(Texture source)
+    {
+        if (source == null) return null;
+        int width = Mathf.Max(1, source.width);
+        int height = Mathf.Max(1, source.height);
+        RenderTexture rt = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        Texture2D readable = null;
         try
         {
-            Texture2D copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
-            copy.SetPixels(source.GetPixels());
-            copy.Apply(false, false);
-            return copy;
+            Graphics.Blit(source, rt);
+            RenderTexture.active = rt;
+            readable = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            readable.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+            readable.Apply(false, false);
+            readable.hideFlags = HideFlags.DontUnloadUnusedAsset;
+            return readable;
         }
         catch (Exception ex)
         {
             Debug.LogWarning("[MultiplayerManager] Opponent photo copy skipped: " + ex.Message);
+            if (readable != null)
+                Destroy(readable);
             return null;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
         }
     }
 
@@ -2113,23 +2232,128 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
         return image.name == "Avatar" || image.name == "AvatarImage";
     }
 
+    private const string CirclePortraitName = "OpponentProfileCircle";
+    // Clipped portraits stay alive: several Images (lobby, HUD, board panel) can show the
+    // same one, so destroying an older clip blanks whichever Image still uses it.
+    private static readonly Dictionary<int, Sprite> _circleClips = new Dictionary<int, Sprite>();
+
     /// <summary>
-    /// Puts the cached opponent photo on the Image that is already in the scene.
-    /// Does not create a Circle Mask, an Avatar Image, or any other object.
+    /// Puts the cached opponent photo on the Image already in the scene.
+    /// The photo stays on that Image, with the corners cleared so it reads as a circle.
+    /// A child mask disabled the Image and the portrait disappeared.
     /// </summary>
     public static void AssignExistingOpponentImage(Image image, Sprite sprite)
     {
         if (image == null || sprite == null) return;
-        if (IsPlaceholderAvatar(sprite) && image.sprite != null && !IsPlaceholderAvatar(image.sprite))
-            return;
-        image.sprite = sprite;
-        image.enabled = true;
-        image.color = Color.white;
-        for (int i = 0; i < image.transform.childCount; i++)
+
+        Image portrait = image;
+        if (portrait.transform.parent != null
+            && portrait.transform.parent.name == "Circle Mask"
+            && portrait.transform.parent.parent != null)
         {
-            Transform child = image.transform.GetChild(i);
+            Image outer = portrait.transform.parent.parent.GetComponent<Image>();
+            if (outer != null)
+                portrait = outer;
+        }
+
+        Transform mask = portrait.transform.Find("Circle Mask");
+        if (mask != null)
+            mask.gameObject.SetActive(false);
+
+        if (IsPlaceholderAvatar(sprite) && portrait.sprite != null && !IsPlaceholderAvatar(portrait.sprite))
+            return;
+
+        portrait.sprite = CirclePortrait(sprite);
+        portrait.enabled = true;
+        portrait.color = Color.white;
+        portrait.preserveAspect = true;
+        for (int i = 0; i < portrait.transform.childCount; i++)
+        {
+            Transform child = portrait.transform.GetChild(i);
             if (child.name == "CircleSpinner" || child.name == "CircleLoading")
                 child.gameObject.SetActive(false);
+        }
+    }
+
+    private static Sprite CirclePortrait(Sprite sprite)
+    {
+        if (sprite == null || sprite.texture == null) return sprite;
+        if (sprite.name == CirclePortraitName) return sprite;
+        int id = sprite.GetInstanceID();
+        if (_circleClips.TryGetValue(id, out Sprite cached) && cached != null)
+            return cached;
+
+        const int size = 256;
+        Texture2D readable = BlitSpriteSquare(sprite, size);
+        if (readable == null) return sprite;
+
+        Color[] pixels = readable.GetPixels();
+        float radius = (size - 1) * 0.5f;
+        Vector2 center = new Vector2(radius, radius);
+        for (int y = 0; y < size; y++)
+        {
+            for (int x = 0; x < size; x++)
+            {
+                int index = y * size + x;
+                float distance = Vector2.Distance(new Vector2(x, y), center);
+                Color color = pixels[index];
+                if (distance > radius)
+                    color.a = 0f;
+                else if (distance > radius - 1.25f)
+                    color.a *= (radius - distance) / 1.25f;
+                pixels[index] = color;
+            }
+        }
+
+        readable.SetPixels(pixels);
+        readable.Apply(false, false);
+        readable.hideFlags = HideFlags.DontUnloadUnusedAsset;
+
+        Sprite clipped = Sprite.Create(
+            readable,
+            new Rect(0, 0, size, size),
+            new Vector2(0.5f, 0.5f),
+            size / 120f);
+        clipped.name = CirclePortraitName;
+        clipped.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        _circleClips[id] = clipped;
+        return clipped;
+    }
+
+    private static Texture2D BlitSpriteSquare(Sprite sprite, int size)
+    {
+        Texture source = sprite.texture;
+        if (source == null) return null;
+        RenderTexture rt = RenderTexture.GetTemporary(size, size, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        Texture2D readable = null;
+        try
+        {
+            Rect area = sprite.textureRect;
+            float width = Mathf.Max(1f, source.width);
+            float height = Mathf.Max(1f, source.height);
+            Graphics.Blit(
+                source,
+                rt,
+                new Vector2(area.width / width, area.height / height),
+                new Vector2(area.x / width, area.y / height));
+            RenderTexture.active = rt;
+            readable = new Texture2D(size, size, TextureFormat.RGBA32, false);
+            readable.ReadPixels(new Rect(0, 0, size, size), 0, 0);
+            readable.Apply(false, false);
+            return readable;
+        }
+        catch (Exception ex)
+        {
+            Debug.LogWarning("[MultiplayerManager] Opponent portrait clip skipped: " + ex.Message);
+            if (readable != null)
+                Destroy(readable);
+            return null;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
         }
     }
 
@@ -2153,61 +2377,101 @@ public class MultiplayerManager : MonoBehaviour, INetworkRunnerCallbacks
 
     private IEnumerator DownloadOpponentAvatar(string url)
     {
-        for (int attempt = 0; attempt < 2; attempt++)
+        // The stored url is the one identity announced. Size fallbacks must
+        // still run when that exact string is current; a smaller Google size
+        // used to abort immediately because it did not match OpponentAvatarUrl.
+        string announced = url;
+        string[] candidates = PhotoDownloadCandidates(url);
+        for (int c = 0; c < candidates.Length; c++)
         {
-            using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(url))
+            string candidate = candidates[c];
+            for (int attempt = 0; attempt < 2; attempt++)
             {
-                try { request.SetRequestHeader("User-Agent", "Mozilla/5.0"); }
-                catch (InvalidOperationException) { }
-
-                yield return request.SendWebRequest();
-                if (url != OpponentAvatarUrl)
+                if (!string.Equals(OpponentAvatarUrl, announced, StringComparison.Ordinal))
                 {
                     opponentAvatarRoutine = null;
                     yield break;
                 }
 
-                if (request.result == UnityWebRequest.Result.Success)
+                using (UnityWebRequest request = UnityWebRequestTexture.GetTexture(candidate))
                 {
-                    Texture2D downloaded = DownloadHandlerTexture.GetContent(request);
-                    Texture2D owned = CopyReadableTexture(downloaded);
-                    if (owned != null)
-                    {
-                        int pixels = owned.width * owned.height;
-                        bool better = OpponentAvatarSprite == null || pixels >= opponentAvatarPixels;
-                        if (better)
-                        {
-                            byte[] jpg = owned.EncodeToJPG(90);
-                            if (jpg != null && jpg.Length > 32)
-                                opponentAvatarPayload = jpg;
-                            RememberOpponentAvatar(owned, true);
-                            OnOpponentIdentity?.Invoke();
-                        }
-                        else
-                        {
-                            Destroy(owned);
-                        }
+                    try { request.SetRequestHeader("User-Agent", "Mozilla/5.0"); }
+                    catch (InvalidOperationException) { }
 
-                        loadedOpponentAvatarUrl = url;
+                    yield return request.SendWebRequest();
+                    if (!string.Equals(OpponentAvatarUrl, announced, StringComparison.Ordinal))
+                    {
                         opponentAvatarRoutine = null;
                         yield break;
                     }
+
+                    if (request.result == UnityWebRequest.Result.Success)
+                    {
+                        Texture2D downloaded = DownloadHandlerTexture.GetContent(request);
+                        Texture2D owned = CopyReadableTexture(downloaded);
+                        if (owned != null)
+                        {
+                            int pixels = owned.width * owned.height;
+                            bool better = OpponentAvatarSprite == null || pixels >= opponentAvatarPixels;
+                            if (better)
+                            {
+                                byte[] jpg = owned.EncodeToJPG(90);
+                                if (jpg != null && jpg.Length > 32)
+                                    opponentAvatarPayload = jpg;
+                                RememberOpponentAvatar(owned, true);
+                                OnOpponentIdentity?.Invoke();
+                            }
+                            else
+                            {
+                                Destroy(owned);
+                            }
+
+                            loadedOpponentAvatarUrl = announced;
+                            opponentAvatarRoutine = null;
+                            yield break;
+                        }
+                    }
+
+                    Debug.LogWarning("[MultiplayerManager] Opponent photo download failed: " + candidate + " " + request.error);
                 }
 
-                Debug.LogWarning("[MultiplayerManager] Opponent photo download failed: " + request.error);
+                if (attempt == 0)
+                    yield return new WaitForSecondsRealtime(0.6f);
             }
-
-            if (attempt == 0)
-                yield return new WaitForSecondsRealtime(0.6f);
         }
 
         opponentAvatarRoutine = null;
-        if (OpponentAvatarSprite == null)
+    }
+
+    private static string[] PhotoDownloadCandidates(string url)
+    {
+        string[] sizes = { null, "=s512-c", "=s256-c", "=s96-c" };
+        var list = new List<string>();
+        for (int i = 0; i < sizes.Length; i++)
         {
-            string fallback = url.Replace("=s1024-c", "=s512-c");
-            if (!string.Equals(fallback, url, StringComparison.Ordinal))
-                yield return DownloadOpponentAvatar(fallback);
+            string candidate = sizes[i] == null ? url : WithGooglePhotoSize(url, sizes[i]);
+            if (string.IsNullOrEmpty(candidate)) continue;
+            bool seen = false;
+            for (int j = 0; j < list.Count; j++)
+            {
+                if (string.Equals(list[j], candidate, StringComparison.Ordinal))
+                {
+                    seen = true;
+                    break;
+                }
+            }
+            if (!seen)
+                list.Add(candidate);
         }
+        return list.ToArray();
+    }
+
+    private static string WithGooglePhotoSize(string url, string size)
+    {
+        if (string.IsNullOrEmpty(url)) return url;
+        int marker = url.LastIndexOf("=s", StringComparison.OrdinalIgnoreCase);
+        if (marker < 0) return url;
+        return url.Substring(0, marker) + size;
     }
 
     private IEnumerator ConfigureRoomSoon()

@@ -1002,7 +1002,7 @@ public class ProfileManager : MonoBehaviour
             // The web request destroys its texture when it is disposed. Keep a
             // copy so the portrait still exists when the match scene loads and
             // so it can be sent to the other player.
-            Texture2D owned = CopyOwnedTexture(downloaded) ?? downloaded;
+            Texture2D owned = CopyOwnedTexture(downloaded);
             if (owned == null)
                 yield break;
 
@@ -1026,10 +1026,6 @@ public class ProfileManager : MonoBehaviour
     public static Image ApplyCircularMask(Image source)
     {
         if (source == null) return null;
-        // OpponentAvatarImage already has its mask in the scene. Never build
-        // another Circle Mask or Avatar Image under it.
-        if (source.gameObject.name == "OpponentAvatarImage")
-            return source;
         if (source.transform.parent != null && source.transform.parent.name == "Circle Mask")
             return source;
 
@@ -1041,6 +1037,7 @@ public class ProfileManager : MonoBehaviour
             if (ready != null)
             {
                 source.enabled = false;
+                LiftLoadingRing(source.transform);
                 return ready;
             }
         }
@@ -1072,7 +1069,19 @@ public class ProfileManager : MonoBehaviour
         inner.type = Image.Type.Simple;
 
         source.enabled = false;
+        LiftLoadingRing(source.transform);
         return inner;
+    }
+
+    private static void LiftLoadingRing(Transform avatarRoot)
+    {
+        if (avatarRoot == null) return;
+        for (int i = 0; i < avatarRoot.childCount; i++)
+        {
+            Transform child = avatarRoot.GetChild(i);
+            if (child.name == "CircleLoading" || child.name == "CircleSpinner")
+                child.SetAsLastSibling();
+        }
     }
 
     private static void Stretch(RectTransform rect)
@@ -1184,18 +1193,63 @@ public class ProfileManager : MonoBehaviour
     private static Texture2D CopyOwnedTexture(Texture2D source)
     {
         if (source == null) return null;
+
+        Texture2D copy = null;
+        if (source.isReadable)
+        {
+            try
+            {
+                copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
+                copy.SetPixels(source.GetPixels());
+                copy.Apply(false, false);
+            }
+            catch (System.Exception ex)
+            {
+                Debug.LogWarning("[ProfileManager] Account photo pixel copy skipped: " + ex.Message);
+                if (copy != null)
+                    Destroy(copy);
+                copy = null;
+            }
+        }
+
+        // Google and Facebook photos are often not CPU-readable. Without a
+        // blit copy the web request destroys the only texture, this device
+        // cannot encode a JPEG, and the opponent never sees the picture.
+        if (copy == null)
+            copy = BlitOwnedTexture(source);
+        if (copy != null)
+            copy.hideFlags = HideFlags.DontUnloadUnusedAsset;
+        return copy;
+    }
+
+    private static Texture2D BlitOwnedTexture(Texture source)
+    {
+        if (source == null) return null;
+        int width = Mathf.Max(1, source.width);
+        int height = Mathf.Max(1, source.height);
+        RenderTexture rt = RenderTexture.GetTemporary(width, height, 0, RenderTextureFormat.ARGB32);
+        RenderTexture previous = RenderTexture.active;
+        Texture2D readable = null;
         try
         {
-            Texture2D copy = new Texture2D(source.width, source.height, TextureFormat.RGBA32, false);
-            copy.SetPixels(source.GetPixels());
-            copy.Apply(false, false);
-            copy.hideFlags = HideFlags.DontUnloadUnusedAsset;
-            return copy;
+            Graphics.Blit(source, rt);
+            RenderTexture.active = rt;
+            readable = new Texture2D(width, height, TextureFormat.RGBA32, false);
+            readable.ReadPixels(new Rect(0, 0, width, height), 0, 0);
+            readable.Apply(false, false);
+            return readable;
         }
         catch (System.Exception ex)
         {
             Debug.LogWarning("[ProfileManager] Account photo copy skipped: " + ex.Message);
+            if (readable != null)
+                Destroy(readable);
             return null;
+        }
+        finally
+        {
+            RenderTexture.active = previous;
+            RenderTexture.ReleaseTemporary(rt);
         }
     }
 
