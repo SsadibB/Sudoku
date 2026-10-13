@@ -25,19 +25,9 @@ public class OpponentBoardPanel : MonoBehaviour
     [Header("Header")]
     [SerializeField] private TMP_Text opponentNameText;
     [SerializeField] private TMP_Text opponentLevelText;
-    [SerializeField] private Image opponentAvatarImage;
-    [SerializeField] private TMP_Text opponentProgressText;
-    [SerializeField] private TMP_Text opponentScoreText;
-    [SerializeField] private TMP_Text opponentLivesText;
 
-    [Header("Opponent Lives Visuals")]
-    [SerializeField] private Image[] opponentHeartSlots;
-    [SerializeField] private Sprite fullHeartSprite;
-    [SerializeField] private Sprite halfHeartSprite;
-    [SerializeField] private Sprite emptyHeartSprite;
-
-    [Header("Close Button")]
-    [SerializeField] private Button closeButton;
+    [Header("Name And Level")]
+    [SerializeField] private TMP_FontAsset identityFont;
 
     [Header("Grid Layout Matching Game Board")]
     [SerializeField] private Vector2 bigGridCellSize = new Vector2(287f, 345f);
@@ -47,32 +37,30 @@ public class OpponentBoardPanel : MonoBehaviour
     [SerializeField] private Vector2 smallGridSpacing = new Vector2(3.6f, 4f);
     [SerializeField] private float cellFontSize = 70f;
 
-    [Header("Non-White Aesthetic Color Palette")]
-    [SerializeField] private Color panelBgColor = new Color(0.06f, 0.08f, 0.14f, 0.98f); // Obsidian Midnight Navy
-    [SerializeField] private Color gridBgColor = new Color(0.03f, 0.04f, 0.08f, 0.90f); // Deep Cavity
-    [SerializeField] private Color headerNameColor = new Color(0.96f, 0.78f, 0.35f, 1f);    // Luminous Amber Gold
-    [SerializeField] private Color progressTextColor = new Color(0.25f, 0.88f, 0.70f, 1f);    // Electric Cyan Mint
-    [SerializeField] private Color scoreTextColor = new Color(0.96f, 0.78f, 0.35f, 1f);    // Luminous Amber Gold
-    [SerializeField] private Color livesTextColor = new Color(0.95f, 0.35f, 0.42f, 1f);    // Warm Coral Red
-    [SerializeField] private Color emptyCellColor = new Color(0.12f, 0.16f, 0.24f, 1f);    // Deep Twilight Slate
+    [Header("Cell Colors")]
+    [SerializeField] private Color emptyCellColor = new Color(0.12f, 0.16f, 0.24f, 1f);
     [SerializeField] private Color fixedCellColor = new Color(0.24f, 0.22f, 0.17f, 1f);    // Dark Warm Bronze
     [SerializeField] private Color fixedTextColor = new Color(0.92f, 0.78f, 0.58f, 1f);    // Light Amber Sand
-    [SerializeField] private Color completedCellColor = new Color(0.08f, 0.44f, 0.28f, 1f);    // Vibrant Emerald Jade
-    [SerializeField] private Color completedTextColor = new Color(0.60f, 0.96f, 0.78f, 1f);    // Bright Mint Aqua
-    [SerializeField] private Color wrongCellColor = new Color(0.48f, 0.14f, 0.18f, 1f);    // Deep Ruby Crimson
+    [SerializeField] private Color completedCellColor = new Color(0.08f, 0.44f, 0.28f, 1f);
+    [SerializeField] private Color wrongCellColor = new Color(0.48f, 0.14f, 0.18f, 1f);
     [SerializeField] private Color wrongTextColor = new Color(0.98f, 0.72f, 0.75f, 1f);    // Light Rose Peach
-    [SerializeField] private Color closeButtonColor = new Color(0.65f, 0.18f, 0.22f, 1f);    // Garnet Crimson
-    [SerializeField] private Color closeButtonTextColor = new Color(0.96f, 0.82f, 0.55f, 1f);    // Warm Gold Icon
-
     [Header("Animation")]
     [SerializeField] private float animDuration = 0.35f;
 
     // Copied from the live game board so both boards share one look.
-    private static readonly Color boardFrameColor = new Color(0.157f, 0.212f, 0.31f, 1f); // BoardBG fill
+    private const float NameHeight = 60f;
+    private const float LevelHeight = 48f;
+    private const float HeaderGap = 8f;
+    private const float HeaderBand = NameHeight + HeaderGap + LevelHeight;
+    private const float CardPad = 28f;
+    private static readonly Color PanelColor = new Color(58f / 255f, 74f / 255f, 93f / 255f, 1f); // #3A4A5D
+    private static readonly Color IdentityColor = Color.white;
+    private Sprite boardFrameSprite;
     private Sprite cellSprite;
     private TMP_FontAsset cellFont;
     private Color altBoxCellColor;
     private bool themeMatched;
+    private bool profileHeaderReady;
 
     // 81 cell Image and Text references (ordered row-major: r*9 + c)
     private Image[] cellImages;
@@ -80,6 +68,10 @@ public class OpponentBoardPanel : MonoBehaviour
 
     // Snapshot of the puzzle's fixed initial clue cells
     private bool[] isFixedCell = new bool[81];
+    private readonly byte[] _shownCells = new byte[81];
+    private bool _cellsPrimed;
+    private string _shownName;
+    private int _shownLevel = int.MinValue;
 
     private bool isInitialized;
     private bool isVisible;
@@ -106,15 +98,7 @@ public class OpponentBoardPanel : MonoBehaviour
             panelRoot.SetActive(false);
         }
 
-        if (closeButton != null)
-        {
-            closeButton.onClick.AddListener(Hide);
-        }
-    }
-
-    private void Start()
-    {
-        Initialize();
+        EnableOutsideTapToClose();
     }
 
     private void CaptureDefaultTransform()
@@ -141,21 +125,6 @@ public class OpponentBoardPanel : MonoBehaviour
         if (isInitialized) return;
         isInitialized = true;
 
-        if (fullHeartSprite == null || halfHeartSprite == null || emptyHeartSprite == null)
-        {
-#if UNITY_2023_1_OR_NEWER
-            var hm = FindAnyObjectByType<HeartManager>();
-#else
-            var hm = FindObjectOfType<HeartManager>();
-#endif
-            if (hm != null)
-            {
-                if (fullHeartSprite == null) fullHeartSprite = hm.FullHeartSprite;
-                if (halfHeartSprite == null) halfHeartSprite = hm.HalfHeartSprite;
-                if (emptyHeartSprite == null) emptyHeartSprite = hm.EmptyHeartSprite;
-            }
-        }
-
         CaptureDefaultTransform();
         MatchGameBoardTheme();
         BuildMiniGrid();
@@ -174,13 +143,17 @@ public class OpponentBoardPanel : MonoBehaviour
         fixedCellColor = emptyCellColor;
         fixedTextColor = board.CellTextColor;
         completedCellColor = new Color(0.80f, 0.93f, 0.78f, 1f);
-        completedTextColor = new Color(0.18f, 0.55f, 0.18f, 1f);
         wrongCellColor = new Color(1f, 0.84f, 0.84f, 1f);
         wrongTextColor = new Color(0.85f, 0.15f, 0.15f, 1f);
         boxBorderColor = Color.clear;
-        gridBgColor = Color.clear;
-        panelBgColor = new Color(0.03f, 0.05f, 0.09f, 0.72f);
         cellFont = board.CellFontAsset;
+
+        if (board.transform.parent != null)
+        {
+            Image frame = board.transform.parent.GetComponent<Image>();
+            if (frame != null)
+                boardFrameSprite = frame.sprite;
+        }
 
         if (board.Cells != null && board.Cells[0, 0] != null)
         {
@@ -225,15 +198,6 @@ public class OpponentBoardPanel : MonoBehaviour
         if (defaultPanelLocalScale.sqrMagnitude < 0.01f)
             defaultPanelLocalScale = Vector3.one;
 
-        // Start animation from the Board button's position and scale zero
-        if (boardButtonTransform != null)
-        {
-            panelRoot.transform.position = boardButtonTransform.position;
-        }
-        else
-        {
-            panelRoot.transform.position = defaultPanelWorldPos;
-        }
         panelRoot.transform.localScale = Vector3.zero;
 
         if (panelCG != null)
@@ -241,11 +205,8 @@ public class OpponentBoardPanel : MonoBehaviour
 
         panelRoot.SetActive(true);
         ApplyColorTheme();
-
-        // Animate out from button to default center position
-        posTween = panelRoot.transform.DOMove(defaultPanelWorldPos, animDuration)
-            .SetEase(Ease.OutBack)
-            .SetLink(panelRoot);
+        Canvas.ForceUpdateCanvases();
+        FitBoardGrid();
 
         scaleTween = panelRoot.transform.DOScale(defaultPanelLocalScale, animDuration)
             .SetEase(Ease.OutBack)
@@ -308,7 +269,7 @@ public class OpponentBoardPanel : MonoBehaviour
         fadeTween?.Kill();
     }
 
-    private void ApplyOpponentIdentity(NetworkSudokuPlayer remote)
+    private void ApplyOpponentIdentity()
     {
         EnsureOpponentHeader();
 
@@ -316,107 +277,109 @@ public class OpponentBoardPanel : MonoBehaviour
             ? MultiplayerManager.Instance.OpponentProfileLevel
             : 1;
 
-        if (opponentLevelText != null)
-            opponentLevelText.text = $"Level {Mathf.Max(1, level):00}";
-
-        if (opponentAvatarImage == null) return;
-
-        Sprite avatar = null;
-        var mp = MultiplayerManager.Instance;
-        bool accountPhoto = mp != null && (mp.OpponentAvatarSprite != null || !string.IsNullOrEmpty(mp.OpponentAvatarUrl));
-        if (mp != null)
-            avatar = mp.GetOpponentAvatar();
-        if (avatar == null && !accountPhoto && remote != null && ProfileManager.Instance != null && remote.AvatarIndex >= 0)
-            avatar = ProfileManager.Instance.GetPresetAvatar(remote.AvatarIndex);
-        if (mp != null && avatar != null)
-            mp.PaintOpponentAvatars();
-
-        if (opponentAvatarImage != null && avatar != null)
-            MultiplayerManager.AssignExistingOpponentImage(opponentAvatarImage, avatar);
+        string levelLabel = $"Level {Mathf.Max(1, level):00}";
+        if (opponentLevelText != null && (_shownLevel != level || opponentLevelText.text != levelLabel))
+        {
+            _shownLevel = level;
+            opponentLevelText.text = levelLabel;
+        }
     }
 
     private void EnsureOpponentHeader()
     {
-        if (panelRoot == null) return;
+        if (panelRoot == null || profileHeaderReady) return;
 
-        if (opponentLevelText == null && opponentNameText != null)
+        Transform card = FindCard();
+        if (card == null) card = panelRoot.transform;
+
+        Transform rowTransform = card.Find("OpponentProfile");
+        RectTransform row;
+        if (rowTransform == null)
         {
-            Transform existing = opponentNameText.transform.parent.Find("OpponentLevelText");
-            if (existing == null)
+            var rowObject = new GameObject("OpponentProfile", typeof(RectTransform));
+            rowObject.transform.SetParent(card, false);
+            row = rowObject.GetComponent<RectTransform>();
+        }
+        else
+        {
+            row = (RectTransform)rowTransform;
+        }
+
+        // Name, then level, in the band above the board and inset from the panel edges.
+        row.anchorMin = new Vector2(0f, 1f);
+        row.anchorMax = new Vector2(1f, 1f);
+        row.pivot = new Vector2(0.5f, 1f);
+        row.offsetMin = new Vector2(CardPad, -(CardPad + HeaderBand));
+        row.offsetMax = new Vector2(-CardPad, -CardPad);
+        row.SetAsLastSibling();
+
+        if (opponentNameText != null)
+        {
+            opponentNameText.transform.SetParent(row, false);
+            StyleIdentityLabel(opponentNameText, 0f, NameHeight, 45f);
+        }
+
+        if (opponentLevelText == null)
+        {
+            Transform levelTransform = row.Find("OpponentLevelText");
+            if (levelTransform == null)
             {
-                var go = new GameObject("OpponentLevelText", typeof(RectTransform));
-                go.transform.SetParent(opponentNameText.transform.parent, false);
-                var rt = go.GetComponent<RectTransform>();
-                rt.anchorMin = opponentNameText.rectTransform.anchorMin;
-                rt.anchorMax = opponentNameText.rectTransform.anchorMax;
-                rt.pivot = opponentNameText.rectTransform.pivot;
-                rt.sizeDelta = opponentNameText.rectTransform.sizeDelta;
-                rt.anchoredPosition = opponentNameText.rectTransform.anchoredPosition + new Vector2(0f, -36f);
-                var tmp = go.AddComponent<TextMeshProUGUI>();
-                tmp.font = opponentNameText.font;
-                tmp.fontSize = Mathf.Max(18f, opponentNameText.fontSize * 0.7f);
-                tmp.alignment = TextAlignmentOptions.Center;
-                tmp.color = headerNameColor;
-                tmp.raycastTarget = false;
-                opponentLevelText = tmp;
+                var levelObject = new GameObject("OpponentLevelText", typeof(RectTransform));
+                levelObject.transform.SetParent(row, false);
+                TextMeshProUGUI created = levelObject.AddComponent<TextMeshProUGUI>();
+                if (opponentNameText != null)
+                    created.font = opponentNameText.font;
+                opponentLevelText = created;
             }
             else
             {
-                opponentLevelText = existing.GetComponent<TMP_Text>();
+                opponentLevelText = levelTransform.GetComponent<TMP_Text>();
             }
         }
-
-        if (opponentAvatarImage == null)
+        else if (opponentLevelText.transform.parent != row)
         {
-            Transform existing = panelRoot.transform.Find("OpponentAvatarImage");
-            if (existing == null)
-                existing = panelRoot.transform.Find("OpponentAvatar");
-            if (existing == null && opponentNameText != null)
-                existing = opponentNameText.transform.parent.Find("OpponentAvatarImage");
-            if (existing != null)
-                opponentAvatarImage = existing.GetComponent<Image>();
+            opponentLevelText.transform.SetParent(row, false);
         }
 
-        var hearts = FindAnyObjectByType<HeartManager>();
-        if (hearts != null)
-        {
-            if (fullHeartSprite == null) fullHeartSprite = hearts.FullHeartSprite;
-            if (halfHeartSprite == null) halfHeartSprite = hearts.HalfHeartSprite;
-            if (emptyHeartSprite == null) emptyHeartSprite = hearts.EmptyHeartSprite;
-        }
+        StyleIdentityLabel(opponentLevelText, NameHeight + HeaderGap, HeaderBand, 35f);
+        profileHeaderReady = true;
+
+        RectTransform gridRect = gridParent as RectTransform;
+        if (gridRect != null)
+            PlaceIdentity();
     }
 
-    private void UpdateHeartSlots(int halfHearts)
+    private void StyleIdentityLabel(TMP_Text label, float top, float bottom, float size)
     {
-        if (opponentHeartSlots == null || opponentHeartSlots.Length == 0) return;
-
-        for (int i = 0; i < opponentHeartSlots.Length; i++)
-        {
-            if (opponentHeartSlots[i] == null) continue;
-            int slotHalf = halfHearts - (i * 2);
-            if (slotHalf >= 2)
-            {
-                opponentHeartSlots[i].sprite = fullHeartSprite;
-                opponentHeartSlots[i].enabled = (fullHeartSprite != null);
-            }
-            else if (slotHalf == 1)
-            {
-                opponentHeartSlots[i].sprite = halfHeartSprite;
-                opponentHeartSlots[i].enabled = (halfHeartSprite != null);
-            }
-            else
-            {
-                opponentHeartSlots[i].sprite = emptyHeartSprite;
-                opponentHeartSlots[i].enabled = (emptyHeartSprite != null);
-            }
-        }
+        if (label == null) return;
+        RectTransform rect = label.rectTransform;
+        rect.anchorMin = new Vector2(0f, 1f);
+        rect.anchorMax = new Vector2(1f, 1f);
+        rect.pivot = new Vector2(0.5f, 1f);
+        rect.offsetMin = new Vector2(0f, -bottom);
+        rect.offsetMax = new Vector2(0f, -top);
+        label.alignment = TextAlignmentOptions.Center;
+        label.color = IdentityColor;
+        if (identityFont != null)
+            label.font = identityFont;
+        label.enableAutoSizing = false;
+        label.fontSize = size;
+        label.textWrappingMode = TextWrappingModes.NoWrap;
+        label.overflowMode = TextOverflowModes.Ellipsis;
+        label.raycastTarget = false;
+        label.outlineWidth = 0f;
+        label.gameObject.SetActive(true);
     }
 
     // ---- Update ----
 
+    private float _nextBoardRefresh;
+
     private void Update()
     {
         if (!isVisible) return;
+        if (Time.unscaledTime < _nextBoardRefresh) return;
+        _nextBoardRefresh = Time.unscaledTime + 0.1f;
         RefreshDisplay();
     }
 
@@ -460,61 +423,34 @@ public class OpponentBoardPanel : MonoBehaviour
                 if (string.IsNullOrWhiteSpace(pName))
                     pName = remote.PlayerName.ToString();
                 pName = ProfileManager.ShortDisplayName(pName);
-                opponentNameText.text = pName ?? "";
-                ProfileManager.FitNameLabel(opponentNameText);
-                opponentNameText.color = headerNameColor;
+                if (string.IsNullOrEmpty(pName)) pName = "Opponent";
+                if (_shownName != pName)
+                {
+                    _shownName = pName;
+                    opponentNameText.text = pName;
+                    opponentNameText.color = IdentityColor;
+                    opponentNameText.alignment = TextAlignmentOptions.Center;
+                }
             }
 
-            ApplyOpponentIdentity(remote);
-
-            if (opponentProgressText != null)
-            {
-                opponentProgressText.text = remote.IsFinished
-                    ? "Finished!"
-                    : $"{remote.CompletedCells}/81";
-                opponentProgressText.color = progressTextColor;
-            }
-
-            if (opponentScoreText != null)
-            {
-                opponentScoreText.text = $"Score: {remote.Score}";
-                opponentScoreText.color = scoreTextColor;
-            }
-
-            UpdateHeartSlots(remote.HalfHearts);
-
-            if (opponentLivesText != null && opponentLivesText.gameObject.activeSelf)
-            {
-                opponentLivesText.gameObject.SetActive(false);
-            }
+            ApplyOpponentIdentity();
         }
         else
         {
             if (opponentNameText != null)
             {
                 string known = MultiplayerManager.Instance != null ? MultiplayerManager.Instance.OpponentName : null;
-                opponentNameText.text = string.IsNullOrWhiteSpace(known) ? "Opponent" : ProfileManager.ShortDisplayName(known);
-                opponentNameText.color = headerNameColor;
+                string pName = string.IsNullOrWhiteSpace(known) ? "Opponent" : ProfileManager.ShortDisplayName(known);
+                if (_shownName != pName)
+                {
+                    _shownName = pName;
+                    opponentNameText.text = pName;
+                    opponentNameText.color = IdentityColor;
+                    opponentNameText.alignment = TextAlignmentOptions.Center;
+                }
             }
 
-            if (opponentProgressText != null)
-            {
-                opponentProgressText.text = "Waiting for Opponent...";
-                opponentProgressText.color = progressTextColor;
-            }
-
-            if (opponentScoreText != null)
-            {
-                opponentScoreText.text = "Score: 0";
-                opponentScoreText.color = scoreTextColor;
-            }
-
-            UpdateHeartSlots(6);
-
-            if (opponentLivesText != null && opponentLivesText.gameObject.activeSelf)
-            {
-                opponentLivesText.gameObject.SetActive(false);
-            }
+            ApplyOpponentIdentity();
         }
 
         // Live grid cells
@@ -530,16 +466,15 @@ public class OpponentBoardPanel : MonoBehaviour
                 int i = r * 9 + c;
                 if (i >= cellImages.Length || cellImages[i] == null) continue;
 
-                int num = 0;
-                bool isWrong = false;
-
-                // Read remote player's cell state if connected
+                byte rawVal = 0;
                 if (remote != null)
-                {
-                    byte rawVal = remote.BoardSnapshot[i];
-                    num = rawVal & 0x0F;
-                    isWrong = (rawVal & 0x10) != 0;
-                }
+                    rawVal = remote.BoardSnapshot[i];
+                if (_cellsPrimed && _shownCells[i] == rawVal)
+                    continue;
+                _shownCells[i] = rawVal;
+
+                int num = rawVal & 0x0F;
+                bool isWrong = (rawVal & 0x10) != 0;
 
                 // Check fixed initial puzzle clues
                 bool isFixed = isFixedCell[i];
@@ -594,26 +529,108 @@ public class OpponentBoardPanel : MonoBehaviour
                 }
             }
         }
+
+        if (puzzle != null)
+            _cellsPrimed = true;
     }
 
     // ---- Board grid builder matching game board layout ----
+
+    // Squares the board under the profile row and gives every cell the same thin gap,
+    // including across the nine 3x3 boxes. The old 20x25 box spacing left empty bands.
+    private void FitBoardGrid()
+    {
+        if (gridParent == null) return;
+
+        RectTransform gridRect = gridParent as RectTransform;
+        if (gridRect == null) return;
+        Transform dim = EnsureDimBackground();
+        Canvas.ForceUpdateCanvases();
+        RectTransform card = gridRect.parent as RectTransform;
+
+        RectTransform panel = panelRoot != null ? panelRoot.transform as RectTransform : null;
+        float panelWidth = panel != null ? panel.rect.width : 0f;
+        float panelHeight = panel != null ? panel.rect.height : 0f;
+        if (panelWidth < 100f) panelWidth = 980f;
+        if (panelHeight < 100f) panelHeight = 1400f;
+
+        const float screenMargin = 48f;
+        const float belowHeader = 16f;
+        float side = Mathf.Min(
+            panelWidth - screenMargin * 2f - CardPad * 2f,
+            panelHeight - screenMargin * 2f - CardPad * 2f - HeaderBand - belowHeader);
+        side = Mathf.Max(280f, side);
+
+        if (card != null)
+        {
+            if (dim != null && card.parent != dim)
+                card.SetParent(dim, false);
+
+            card.anchorMin = new Vector2(0.5f, 0.5f);
+            card.anchorMax = new Vector2(0.5f, 0.5f);
+            card.pivot = new Vector2(0.5f, 0.5f);
+            card.anchoredPosition = Vector2.zero;
+            card.sizeDelta = new Vector2(
+                side + CardPad * 2f,
+                CardPad + HeaderBand + belowHeader + side + CardPad);
+            if (card.GetComponent<RectMask2D>() == null)
+                card.gameObject.AddComponent<RectMask2D>();
+        }
+
+        gridRect.anchorMin = new Vector2(0.5f, 1f);
+        gridRect.anchorMax = new Vector2(0.5f, 1f);
+        gridRect.pivot = new Vector2(0.5f, 1f);
+        gridRect.anchoredPosition = new Vector2(0f, -(CardPad + HeaderBand + belowHeader));
+        gridRect.sizeDelta = new Vector2(side, side);
+
+        // Same proportions as the game board: a thin gap between cells and a wider
+        // gap between the 3x3 boxes, with the frame margin matching that box gap.
+        const float cellUnit = 87f;
+        float cell = (side - 8f) / (9f + (6f * 5f + 2f * 14f + 2f * 14f) / cellUnit);
+        float cellGap = cell * (5f / cellUnit);
+        float boxGap = cell * (14f / cellUnit);
+        int pad = Mathf.Max(4, Mathf.RoundToInt(boxGap));
+        smallGridCellSize = new Vector2(cell, cell);
+        smallGridSpacing = new Vector2(cellGap, cellGap);
+        bigGridSpacing = new Vector2(boxGap, boxGap);
+        bigGridCellSize = new Vector2(cell * 3f + cellGap * 2f, cell * 3f + cellGap * 2f);
+
+        GridLayoutGroup outer = gridParent.GetComponent<GridLayoutGroup>();
+        if (outer != null)
+        {
+            outer.cellSize = bigGridCellSize;
+            outer.spacing = bigGridSpacing;
+            outer.padding = new RectOffset(pad, pad, pad, pad);
+        }
+
+        ApplyBoardFrame();
+        ApplyPanelBackground();
+        EnsureDimBackground();
+        PlaceIdentity();
+
+        for (int i = 0; i < gridParent.childCount; i++)
+        {
+            GridLayoutGroup inner = gridParent.GetChild(i).GetComponent<GridLayoutGroup>();
+            if (inner == null) continue;
+            inner.cellSize = smallGridCellSize;
+            inner.spacing = smallGridSpacing;
+        }
+    }
 
     private void BuildMiniGrid()
     {
         if (gridParent == null) return;
 
-        // Ensure gridParent has dark cavity background
-        var parentBg = gridParent.GetComponent<Image>();
-        if (parentBg != null)
-        {
-            parentBg.color = gridBgColor;
-        }
+        ApplyBoardFrame();
 
         // Clear any existing children
         for (int i = gridParent.childCount - 1; i >= 0; i--)
             Destroy(gridParent.GetChild(i).gameObject);
 
-        // Configure outer grid (3×3 outer boxes)
+        FitBoardGrid();
+
+        // Outer boxes use the game board's wider 3x3 gap. Padding matches that gap
+        // so the frame margin looks like the real board.
         var outerGrid = gridParent.GetComponent<GridLayoutGroup>();
         if (outerGrid == null) outerGrid = gridParent.gameObject.AddComponent<GridLayoutGroup>();
         outerGrid.constraint = GridLayoutGroup.Constraint.FixedColumnCount;
@@ -621,10 +638,12 @@ public class OpponentBoardPanel : MonoBehaviour
         outerGrid.cellSize = bigGridCellSize;
         outerGrid.spacing = bigGridSpacing;
         outerGrid.childAlignment = TextAnchor.MiddleCenter;
-        outerGrid.padding = new RectOffset(39, 39, 43, 43);
+        int framePad = Mathf.Max(4, Mathf.RoundToInt(bigGridSpacing.x));
+        outerGrid.padding = new RectOffset(framePad, framePad, framePad, framePad);
 
         cellImages = new Image[81];
         cellTexts = new TMP_Text[81];
+        _cellsPrimed = false;
 
         for (int boxRow = 0; boxRow < 3; boxRow++)
         {
@@ -693,38 +712,133 @@ public class OpponentBoardPanel : MonoBehaviour
         if (panelRoot != null)
         {
             var bgImg = panelRoot.GetComponent<Image>();
-            if (bgImg != null) bgImg.color = panelBgColor;
-
-            // Apply panel background color to Card and container images (eliminates pink / white)
-            foreach (var img in panelRoot.GetComponentsInChildren<Image>(true))
+            if (bgImg != null)
             {
-                string n = img.gameObject.name;
-                if (n == "Card")
-                    img.color = themeMatched ? boardFrameColor : panelBgColor;
-                else if (n == "PanelRoot" || n == "OpponentBoardPanel")
-                    img.color = panelBgColor;
+                bgImg.color = Color.clear;
+                bgImg.raycastTarget = true;
+            }
+
+            Transform nested = panelRoot.transform.Find("PanelRoot");
+            if (nested != null)
+            {
+                Image nestedImage = nested.GetComponent<Image>();
+                if (nestedImage != null)
+                    nestedImage.color = Color.clear;
             }
         }
 
-        if (gridParent != null)
+        ApplyBoardFrame();
+        ApplyPanelBackground();
+        EnsureDimBackground();
+
+        if (opponentNameText != null) opponentNameText.color = IdentityColor;
+    }
+
+    private void ApplyBoardFrame()
+    {
+        if (gridParent == null) return;
+        Image frame = gridParent.GetComponent<Image>();
+        if (frame == null)
+            frame = gridParent.gameObject.AddComponent<Image>();
+        if (boardFrameSprite != null)
+            frame.sprite = boardFrameSprite;
+        frame.color = Color.white;
+        frame.type = Image.Type.Simple;
+        frame.preserveAspect = false;
+        frame.raycastTarget = false;
+    }
+
+    private void PlaceIdentity()
+    {
+        if (panelRoot == null) return;
+        Transform card = FindCard();
+        if (card == null) card = panelRoot.transform;
+        RectTransform row = card.Find("OpponentProfile") as RectTransform;
+        if (row == null) return;
+        row.anchorMin = new Vector2(0f, 1f);
+        row.anchorMax = new Vector2(1f, 1f);
+        row.pivot = new Vector2(0.5f, 1f);
+        row.offsetMin = new Vector2(CardPad, -(CardPad + HeaderBand));
+        row.offsetMax = new Vector2(-CardPad, -CardPad);
+    }
+
+    private void ApplyPanelBackground()
+    {
+        if (panelRoot == null) return;
+        Transform card = FindCard();
+        if (card == null) return;
+
+        Image image = card.GetComponent<Image>();
+        if (image == null)
+            image = card.gameObject.AddComponent<Image>();
+        image.sprite = null;
+        image.color = PanelColor;
+        image.type = Image.Type.Simple;
+        image.raycastTarget = true;
+    }
+
+    private Transform EnsureDimBackground()
+    {
+        if (panelRoot == null) return null;
+
+        RectTransform root = panelRoot.transform as RectTransform;
+        if (root != null)
         {
-            var parentBg = gridParent.GetComponent<Image>();
-            if (parentBg != null) parentBg.color = gridBgColor;
+            root.anchorMin = Vector2.zero;
+            root.anchorMax = Vector2.one;
+            root.pivot = new Vector2(0.5f, 0.5f);
+            root.anchoredPosition = Vector2.zero;
+            root.offsetMin = Vector2.zero;
+            root.offsetMax = Vector2.zero;
         }
 
-        if (opponentNameText != null) opponentNameText.color = headerNameColor;
-        if (opponentProgressText != null) opponentProgressText.color = progressTextColor;
-        if (opponentScoreText != null) opponentScoreText.color = scoreTextColor;
-        if (opponentLivesText != null) opponentLivesText.color = livesTextColor;
-
-        if (closeButton != null)
+        Transform existing = panelRoot.transform.Find("DimBackground");
+        RectTransform rect;
+        if (existing == null)
         {
-            if (closeButton.image != null)
-                closeButton.image.color = closeButtonColor;
-            var closeText = closeButton.GetComponentInChildren<TMP_Text>();
-            if (closeText != null)
-                closeText.color = closeButtonTextColor;
+            var backdrop = new GameObject("DimBackground", typeof(RectTransform), typeof(CanvasRenderer), typeof(Image));
+            backdrop.transform.SetParent(panelRoot.transform, false);
+            rect = backdrop.GetComponent<RectTransform>();
         }
+        else
+        {
+            rect = existing as RectTransform;
+        }
+
+        rect.anchorMin = Vector2.zero;
+        rect.anchorMax = Vector2.one;
+        rect.pivot = new Vector2(0.5f, 0.5f);
+        rect.offsetMin = Vector2.zero;
+        rect.offsetMax = Vector2.zero;
+        rect.SetAsFirstSibling();
+
+        Image image = rect.GetComponent<Image>();
+        image.sprite = null;
+        image.color = new Color(0f, 0f, 0f, 200f / 255f);
+        image.raycastTarget = false;
+        return rect;
+    }
+
+    private Transform FindCard()
+    {
+        if (panelRoot == null) return null;
+        Transform card = panelRoot.transform.Find("DimBackground/Card");
+        if (card == null)
+            card = panelRoot.transform.Find("PanelRoot/Card");
+        if (card == null)
+            card = panelRoot.transform.Find("Card");
+        return card;
+    }
+
+    private void EnableOutsideTapToClose()
+    {
+        if (panelRoot == null) return;
+        Button outside = panelRoot.GetComponent<Button>();
+        if (outside == null)
+            outside = panelRoot.AddComponent<Button>();
+        outside.transition = Selectable.Transition.None;
+        outside.onClick.RemoveListener(Hide);
+        outside.onClick.AddListener(Hide);
     }
 
     private void MarkFixedCells()
